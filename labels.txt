@@ -1,0 +1,5 @@
+0 helm
+1 flasche
+2 mütze
+3 turnbeutel
+4 sonstiges

@@ -1,4 +1,4 @@
-```python
+
 import os
 import uuid
 from datetime import date
@@ -634,4 +634,3 @@ elif st.session_state.page == "add":
 else:
     st.session_state.page = "home"
     st.rerun()
-```

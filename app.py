@@ -1,11 +1,17 @@
-
 import os
 import uuid
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import streamlit as st
+from PIL import Image
+import tensorflow as tf
 
+
+# ---------------------------------------------------------
+# EINSTELLUNGEN
+# ---------------------------------------------------------
 
 APP_NAME = "Fundkiste"
 SCHOOL_NAME = "KATHARINEUM ZU LÜBECK"
@@ -14,6 +20,9 @@ SCHOOL_YEAR = "seit 1531"
 DATA_DIR = "data"
 DATA_FILE = os.path.join(DATA_DIR, "fundstuecke.csv")
 PHOTO_DIR = os.path.join(DATA_DIR, "fotos")
+
+MODEL_FILE = "keras_model.h5"
+LABEL_FILE = "labels.txt"
 
 CATEGORIES = [
     "Kleidung",
@@ -159,6 +168,181 @@ st.markdown(
 
 
 # ---------------------------------------------------------
+# KI LADEN
+# ---------------------------------------------------------
+
+@st.cache_resource
+def load_model():
+    if not os.path.exists(MODEL_FILE):
+        st.error("Die Datei keras_model.h5 wurde nicht gefunden.")
+        return None
+
+    try:
+        model = tf.keras.models.load_model(
+            MODEL_FILE,
+            compile=False
+        )
+        return model
+    except Exception as e:
+        st.error("Das KI-Modell konnte nicht geladen werden.")
+        st.code(str(e))
+        return None
+
+
+@st.cache_data
+def load_labels():
+    if not os.path.exists(LABEL_FILE):
+        st.error("Die Datei labels.txt wurde nicht gefunden.")
+        return []
+
+    try:
+        with open(LABEL_FILE, "r", encoding="utf-8") as file:
+            labels = [line.strip() for line in file if line.strip()]
+
+        # Teachable Machine schreibt manchmal:
+        # "0 Jacke"
+        # "1 Rucksack"
+        # Deshalb entfernen wir vorne eine mögliche Nummer.
+        cleaned_labels = []
+
+        for label in labels:
+            parts = label.split(" ", 1)
+
+            if len(parts) == 2 and parts[0].isdigit():
+                label = parts[1]
+
+            cleaned_labels.append(label)
+
+        return cleaned_labels
+
+    except OSError:
+        st.error("Die labels.txt konnte nicht gelesen werden.")
+        return []
+
+
+model = load_model()
+labels = load_labels()
+
+
+# ---------------------------------------------------------
+# BILD ERKENNEN
+# ---------------------------------------------------------
+
+def predict_image(image):
+    if model is None or not labels:
+        return "Unbekannt", 0.0
+
+    try:
+        # Bild auf die typische Teachable-Machine-Größe bringen
+        image = image.convert("RGB")
+        image = image.resize((224, 224))
+
+        image_array = np.asarray(image).astype(np.float32)
+
+        # Teachable Machine Keras Modelle verwenden normalerweise
+        # Werte zwischen -1 und 1.
+        image_array = (image_array / 127.5) - 1
+
+        image_array = np.expand_dims(image_array, axis=0)
+
+        prediction = model.predict(image_array, verbose=0)[0]
+
+        index = int(np.argmax(prediction))
+        confidence = float(prediction[index])
+
+        if index >= len(labels):
+            return "Unbekannt", confidence
+
+        return labels[index], confidence
+
+    except Exception as e:
+        st.error("Das Foto konnte nicht von der KI erkannt werden.")
+        st.code(str(e))
+        return "Unbekannt", 0.0
+
+
+# ---------------------------------------------------------
+# KATEGORIE AUS KI-ERGEBNIS ERMITTELN
+# ---------------------------------------------------------
+
+def get_category(label):
+    text = label.lower()
+
+    if any(word in text for word in [
+        "jacke",
+        "hose",
+        "shirt",
+        "t-shirt",
+        "pullover",
+        "hoodie",
+        "schuh",
+        "schuhe",
+        "mütze",
+        "cap",
+        "kleidung",
+        "socke",
+        "mantel",
+        "sweatshirt",
+    ]):
+        return "Kleidung"
+
+    if any(word in text for word in [
+        "schlüssel",
+        "schlussel",
+        "key",
+    ]):
+        return "Schlüssel"
+
+    if any(word in text for word in [
+        "flasche",
+        "trinkflasche",
+        "wasserflasche",
+    ]):
+        return "Trinkflasche"
+
+    if any(word in text for word in [
+        "tasche",
+        "rucksack",
+        "rucksack",
+        "schulranzen",
+        "beutel",
+    ]):
+        return "Tasche"
+
+    if any(word in text for word in [
+        "handy",
+        "smartphone",
+        "iphone",
+        "telefon",
+        "phone",
+    ]):
+        return "Handy"
+
+    if any(word in text for word in [
+        "ring",
+        "kette",
+        "armband",
+        "schmuck",
+        "ohrring",
+    ]):
+        return "Schmuck"
+
+    if any(word in text for word in [
+        "buch",
+        "heft",
+        "stift",
+        "bleistift",
+        "kugelschreiber",
+        "lineal",
+        "radiergummi",
+        "schulmaterial",
+    ]):
+        return "Schulmaterial"
+
+    return "Sonstiges"
+
+
+# ---------------------------------------------------------
 # DATEN LADEN
 # ---------------------------------------------------------
 
@@ -178,8 +362,7 @@ def load_data():
 
     except (OSError, pd.errors.ParserError):
         st.error(
-            "Die gespeicherten Fundstücke konnten nicht "
-            "gelesen werden."
+            "Die gespeicherten Fundstücke konnten nicht gelesen werden."
         )
         return pd.DataFrame(columns=COLUMNS)
 
@@ -322,7 +505,7 @@ def show_home():
             st.rerun()
 
         if st.button(
-            "Eingeben",
+            "Fundstück hinzufügen",
             key="home_add",
         ):
             st.session_state.page = "add"
@@ -451,12 +634,12 @@ def show_search(data):
 
 
 # ---------------------------------------------------------
-# FUNDSTÜCK EINGEBEN
+# FUNDSTÜCK MIT FOTO EINGEBEN
 # ---------------------------------------------------------
 
 def show_add_item(data):
 
-    st.title("Fundstück eingeben")
+    st.title("Fundstück hinzufügen")
 
     if st.button(
         "← Zurück",
@@ -466,88 +649,80 @@ def show_add_item(data):
         st.rerun()
 
     st.write(
-        "Trage hier einen gefundenen Gegenstand ein."
+        "Lade einfach ein Foto des gefundenen Gegenstands hoch."
     )
 
-    with st.form(
-        "add_item_form",
-        clear_on_submit=True,
+    photo = st.file_uploader(
+        "Foto hochladen",
+        type=["jpg", "jpeg", "png"],
+    )
+
+    if photo is None:
+        st.info(
+            "Lade ein Foto hoch. Die KI erkennt anschließend den Gegenstand."
+        )
+        return
+
+    # Foto anzeigen
+    image = Image.open(photo)
+
+    st.image(
+        image,
+        caption="Hochgeladenes Foto",
+        use_container_width=True,
+    )
+
+    if st.button(
+        "Foto erkennen",
+        key="recognize_photo",
     ):
 
-        item = st.text_input(
-            "Gegenstand",
-            placeholder="z. B. Schwarze Jacke",
-        )
+        with st.spinner("Die KI erkennt den Gegenstand..."):
 
-        category = st.selectbox(
-            "Kategorie",
-            CATEGORIES,
-        )
+            label, confidence = predict_image(image)
+            category = get_category(label)
 
-        color = st.text_input(
-            "Farbe",
-            placeholder="z. B. Schwarz",
-        )
+        st.session_state.predicted_label = label
+        st.session_state.predicted_category = category
+        st.session_state.predicted_confidence = confidence
 
-        location = st.text_input(
-            "Fundort",
-            placeholder="z. B. Sporthalle",
-        )
-
-        found_date = st.date_input(
-            "Datum",
-            value=date.today(),
-        )
-
-        description = st.text_area(
-            "Beschreibung",
-            placeholder=(
-                "z. B. Schwarze Winterjacke "
-                "mit Kapuze."
-            ),
-        )
-
-        photo = st.file_uploader(
-            "Foto (optional)",
-            type=["jpg", "jpeg", "png"],
-        )
-
-        submitted = st.form_submit_button(
-            "Fundstück speichern"
-        )
-
-    if not submitted:
+    # Ergebnis anzeigen
+    if "predicted_label" not in st.session_state:
         return
 
-    if not item.strip():
-        st.warning(
-            "Bitte gib einen Gegenstand ein."
-        )
-        return
+    label = st.session_state.predicted_label
+    category = st.session_state.predicted_category
+    confidence = st.session_state.predicted_confidence
 
-    if not location.strip():
-        st.warning(
-            "Bitte gib einen Fundort ein."
-        )
-        return
+    st.success(
+        f"Erkannt: {label}"
+    )
 
-    photo_path = ""
+    st.write(
+        f"**Kategorie:** {category}"
+    )
 
-    if photo is not None:
+    st.write(
+        f"**Sicherheit der KI:** {confidence * 100:.1f} %"
+    )
+
+    # Nur der Fundort muss noch angegeben werden.
+    location = st.text_input(
+        "Fundort",
+        placeholder="z. B. Sporthalle, Klassenraum oder Schulhof",
+    )
+
+    if st.button(
+        "Fundstück speichern",
+        key="save_ai_item",
+    ):
+
+        if not location.strip():
+            location = "Nicht angegeben"
 
         extension = os.path.splitext(
             photo.name
         )[1].lower()
-
-        if extension not in [
-            ".jpg",
-            ".jpeg",
-            ".png",
-        ]:
-            st.warning(
-                "Dieses Fotoformat wird nicht unterstützt."
-            )
-            return
 
         filename = (
             uuid.uuid4().hex + extension
@@ -573,44 +748,60 @@ def show_add_item(data):
             )
             return
 
-    new_item = pd.DataFrame(
-        [
-            {
-                "Gegenstand": item.strip(),
-                "Kategorie": category,
-                "Farbe": color.strip(),
-                "Fundort": location.strip(),
-                "Datum": found_date.strftime(
-                    "%d.%m.%Y"
-                ),
-                "Beschreibung": description.strip(),
-                "Foto": photo_path,
-            }
-        ]
-    )
-
-    updated_data = pd.concat(
-        [
-            data,
-            new_item,
-        ],
-        ignore_index=True,
-    )
-
-    if save_data(updated_data):
-
-        st.markdown(
-            """
-            <div class="success-box">
-                ✓ Fundstück erfolgreich gespeichert!
-            </div>
-            """,
-            unsafe_allow_html=True,
+        new_item = pd.DataFrame(
+            [
+                {
+                    "Gegenstand": label,
+                    "Kategorie": category,
+                    "Farbe": "",
+                    "Fundort": location.strip(),
+                    "Datum": date.today().strftime(
+                        "%d.%m.%Y"
+                    ),
+                    "Beschreibung": (
+                        "Automatisch durch die KI erkannt."
+                    ),
+                    "Foto": photo_path,
+                }
+            ]
         )
 
-        st.info(
-            "Das Fundstück ist jetzt bei der Suche verfügbar."
+        updated_data = pd.concat(
+            [
+                data,
+                new_item,
+            ],
+            ignore_index=True,
         )
+
+        if save_data(updated_data):
+
+            st.markdown(
+                """
+                <div class="success-box">
+                    ✓ Fundstück erfolgreich gespeichert!
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            st.info(
+                "Das Fundstück ist jetzt bei der Suche verfügbar."
+            )
+
+            # Ergebnis zurücksetzen
+            st.session_state.pop(
+                "predicted_label",
+                None,
+            )
+            st.session_state.pop(
+                "predicted_category",
+                None,
+            )
+            st.session_state.pop(
+                "predicted_confidence",
+                None,
+            )
 
 
 # ---------------------------------------------------------

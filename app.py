@@ -89,21 +89,40 @@ labels = lade_labels()
 
 
 # -----------------------------
-# Teachable-Machine-Modell laden
+# Kompatibilität für altes
+# Teachable-Machine-Modell
 # -----------------------------
 
 class MeineDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
 
     @classmethod
     def from_config(cls, config):
-        # Manche Teachable-Machine-Modelle
-        # enthalten "groups=1", was ältere Keras-Versionen
-        # nicht akzeptieren.
         config = config.copy()
+
+        # Alte Teachable-Machine-Modelle
+        # enthalten manchmal groups=1.
         config.pop("groups", None)
 
         return super().from_config(config)
 
+
+class MeineFunctional(tf.keras.Model):
+
+    def call(self, inputs, training=None, mask=None):
+
+        # Alte Keras-Modelle können beim Aufruf
+        # zusätzlich einen mask-Parameter bekommen.
+        # Für unser Bildmodell wird dieser nicht benötigt.
+
+        return super().call(
+            inputs,
+            training=training
+        )
+
+
+# -----------------------------
+# Modell laden
+# -----------------------------
 
 @st.cache_resource
 def lade_modell():
@@ -112,17 +131,20 @@ def lade_modell():
         return None, "Die Datei keras_model.h5 wurde nicht gefunden."
 
     try:
+
         modell = tf.keras.models.load_model(
             MODEL_DATEI,
             compile=False,
             custom_objects={
-                "DepthwiseConv2D": MeineDepthwiseConv2D
+                "DepthwiseConv2D": MeineDepthwiseConv2D,
+                "Functional": MeineFunctional
             }
         )
 
         return modell, None
 
     except Exception as e:
+
         return None, str(e)
 
 
@@ -139,7 +161,7 @@ def erkenne_bild(bild):
         return None, 0, modell_fehler
 
     try:
-        # Bild vorbereiten
+
         bild = bild.convert("RGB")
 
         bild = ImageOps.fit(
@@ -148,41 +170,66 @@ def erkenne_bild(bild):
             Image.Resampling.LANCZOS
         )
 
-        bild_array = np.asarray(bild).astype(np.float32)
+        bild_array = np.asarray(
+            bild
+        ).astype(np.float32)
 
-        # Teachable Machine benötigt diese Normalisierung
-        bild_array = (bild_array / 127.5) - 1
+        # Teachable Machine Normalisierung
+        bild_array = (
+            bild_array / 127.5
+        ) - 1
 
-        bild_array = np.expand_dims(bild_array, axis=0)
-
-        # Vorhersage
-        vorhersage = modell.predict(
+        bild_array = np.expand_dims(
             bild_array,
-            verbose=0
+            axis=0
         )
 
-        vorhersage = np.asarray(vorhersage).reshape(-1)
+        # Modell direkt aufrufen
+        # statt model.predict()
+        vorhersage = modell(
+            bild_array,
+            training=False
+        )
+
+        vorhersage = np.asarray(
+            vorhersage
+        ).reshape(-1)
 
         if len(vorhersage) != len(labels):
+
             return (
                 None,
                 0,
-                "Das Modell hat "
+                "Das Modell liefert "
                 + str(len(vorhersage))
-                + " Ergebnisse geliefert, aber labels.txt enthält "
+                + " Ergebnisse, aber labels.txt enthält "
                 + str(len(labels))
                 + " Labels."
             )
 
-        index = int(np.argmax(vorhersage))
+        index = int(
+            np.argmax(vorhersage)
+        )
 
         erkannte_label = labels[index]
-        sicherheit = float(vorhersage[index]) * 100
 
-        return erkannte_label, sicherheit, None
+        sicherheit = (
+            float(vorhersage[index]) * 100
+        )
+
+        return (
+            erkannte_label,
+            sicherheit,
+            None
+        )
 
     except Exception as e:
-        return None, 0, str(e)
+
+        return (
+            None,
+            0,
+            str(e)
+        )
 
 
 # -----------------------------
@@ -215,6 +262,7 @@ def bestimme_kategorie(label):
 def lade_daten():
 
     if not os.path.exists(CSV_DATEI):
+
         return pd.DataFrame(
             columns=[
                 "Gegenstand",
@@ -225,7 +273,9 @@ def lade_daten():
             ]
         )
 
-    return pd.read_csv(CSV_DATEI)
+    return pd.read_csv(
+        CSV_DATEI
+    )
 
 
 # -----------------------------
@@ -233,7 +283,12 @@ def lade_daten():
 # -----------------------------
 
 def speichere_daten(daten):
-    os.makedirs(DATA_ORDNER, exist_ok=True)
+
+    os.makedirs(
+        DATA_ORDNER,
+        exist_ok=True
+    )
+
     daten.to_csv(
         CSV_DATEI,
         index=False,
@@ -263,12 +318,14 @@ def startseite():
     st.write("")
 
     if st.button("🔎 Suchen"):
+
         st.session_state["seite"] = "suchen"
         st.rerun()
 
     st.write("")
 
     if st.button("📦 Fundstück hinzufügen"):
+
         st.session_state["seite"] = "hinzufügen"
         st.rerun()
 
@@ -282,16 +339,23 @@ def fundstueck_hinzufuegen():
     st.title("Fundstück hinzufügen")
 
     if st.button("← Zurück"):
+
         st.session_state["seite"] = "start"
         st.rerun()
 
     st.write("")
 
-    st.write("Lade ein Foto des Fundstücks hoch.")
+    st.write(
+        "Lade ein Foto des Fundstücks hoch."
+    )
 
     foto = st.file_uploader(
         "Foto auswählen",
-        type=["jpg", "jpeg", "png"]
+        type=[
+            "jpg",
+            "jpeg",
+            "png"
+        ]
     )
 
     if foto is not None:
@@ -306,9 +370,13 @@ def fundstueck_hinzufuegen():
 
         if st.button("🤖 KI erkennen lassen"):
 
-            with st.spinner("Die KI analysiert das Foto..."):
+            with st.spinner(
+                "Die KI analysiert das Foto..."
+            ):
 
-                label, sicherheit, fehler = erkenne_bild(bild)
+                label, sicherheit, fehler = erkenne_bild(
+                    bild
+                )
 
             if fehler:
 
@@ -316,11 +384,15 @@ def fundstueck_hinzufuegen():
                     "Die KI konnte das Foto nicht analysieren."
                 )
 
-                st.code(fehler)
+                st.code(
+                    fehler
+                )
 
             else:
 
-                kategorie = bestimme_kategorie(label)
+                kategorie = bestimme_kategorie(
+                    label
+                )
 
                 st.success(
                     "Erkannt: "
@@ -342,8 +414,10 @@ def fundstueck_hinzufuegen():
                 st.session_state["kategorie"] = kategorie
                 st.session_state["bild"] = bild
 
-
-    if st.session_state.get("erkannt", False):
+    if st.session_state.get(
+        "erkannt",
+        False
+    ):
 
         st.write("")
 
@@ -351,9 +425,12 @@ def fundstueck_hinzufuegen():
             "Wo wurde der Gegenstand gefunden?"
         )
 
-        if st.button("Fundstück speichern"):
+        if st.button(
+            "Fundstück speichern"
+        ):
 
             if not fundort:
+
                 st.warning(
                     "Bitte gib noch den Fundort ein."
                 )
@@ -362,7 +439,9 @@ def fundstueck_hinzufuegen():
 
                 daten = lade_daten()
 
-                neue_nummer = len(daten) + 1
+                neue_nummer = (
+                    len(daten) + 1
+                )
 
                 dateiname = (
                     "fundstueck_"
@@ -401,21 +480,22 @@ def fundstueck_hinzufuegen():
                 )
 
                 daten = pd.concat(
-                    [daten, neuer_eintrag],
+                    [
+                        daten,
+                        neuer_eintrag
+                    ],
                     ignore_index=True
                 )
 
-                speichere_daten(daten)
+                speichere_daten(
+                    daten
+                )
 
                 st.success(
                     "Das Fundstück wurde gespeichert!"
                 )
 
                 st.session_state["erkannt"] = False
-
-                if st.button("Zur Startseite"):
-                    st.session_state["seite"] = "start"
-                    st.rerun()
 
 
 # -----------------------------
@@ -424,18 +504,23 @@ def fundstueck_hinzufuegen():
 
 def suchen():
 
-    st.title("Fundstücke suchen")
+    st.title(
+        "Fundstücke suchen"
+    )
 
     if st.button("← Zurück"):
+
         st.session_state["seite"] = "start"
         st.rerun()
 
     daten = lade_daten()
 
     if daten.empty:
+
         st.info(
             "Es wurden noch keine Fundstücke eingetragen."
         )
+
         return
 
     suchtext = st.text_input(
@@ -464,18 +549,25 @@ def suchen():
             ergebnis["Gegenstand"]
             .astype(str)
             .str.lower()
-            .str.contains(text, na=False)
+            .str.contains(
+                text,
+                na=False
+            )
             |
             ergebnis["Fundort"]
             .astype(str)
             .str.lower()
-            .str.contains(text, na=False)
+            .str.contains(
+                text,
+                na=False
+            )
         ]
 
     if kategorie != "Alle":
 
         ergebnis = ergebnis[
-            ergebnis["Kategorie"] == kategorie
+            ergebnis["Kategorie"]
+            == kategorie
         ]
 
     if ergebnis.empty:
@@ -491,23 +583,32 @@ def suchen():
             st.markdown("---")
 
             st.subheader(
-                str(eintrag["Kategorie"])
+                str(
+                    eintrag["Kategorie"]
+                )
             )
 
             st.write(
                 "Fundort:",
-                str(eintrag["Fundort"])
+                str(
+                    eintrag["Fundort"]
+                )
             )
 
             st.write(
                 "Datum:",
-                str(eintrag["Datum"])
+                str(
+                    eintrag["Datum"]
+                )
             )
 
             if (
                 "Foto" in eintrag
-                and os.path.exists(str(eintrag["Foto"]))
+                and os.path.exists(
+                    str(eintrag["Foto"])
+                )
             ):
+
                 st.image(
                     str(eintrag["Foto"]),
                     width=300
@@ -519,13 +620,20 @@ def suchen():
 # -----------------------------
 
 if "seite" not in st.session_state:
+
     st.session_state["seite"] = "start"
 
+
 if st.session_state["seite"] == "start":
+
     startseite()
 
+
 elif st.session_state["seite"] == "hinzufügen":
+
     fundstueck_hinzufuegen()
 
+
 elif st.session_state["seite"] == "suchen":
+
     suchen()

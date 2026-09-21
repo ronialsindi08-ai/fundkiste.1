@@ -5,8 +5,9 @@ from datetime import date
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image
 import tensorflow as tf
+
+from PIL import Image, ImageOps
 
 
 # ---------------------------------------------------------
@@ -25,13 +26,10 @@ MODEL_FILE = "keras_model.h5"
 LABEL_FILE = "labels.txt"
 
 CATEGORIES = [
-    "Kleidung",
-    "Schlüssel",
-    "Trinkflasche",
-    "Tasche",
-    "Handy",
-    "Schmuck",
-    "Schulmaterial",
+    "Helm",
+    "Flasche",
+    "Mütze",
+    "Turnbeutel",
     "Sonstiges",
 ]
 
@@ -175,8 +173,7 @@ st.markdown(
 def load_model():
 
     if not os.path.exists(MODEL_FILE):
-        st.error("Die Datei keras_model.h5 wurde nicht gefunden.")
-        return None
+        return None, "keras_model.h5 wurde nicht gefunden."
 
     try:
         model = tf.keras.models.load_model(
@@ -184,20 +181,17 @@ def load_model():
             compile=False
         )
 
-        return model
+        return model, None
 
     except Exception as e:
-        st.error("Das KI-Modell konnte nicht geladen werden.")
-        st.code(str(e))
-        return None
+        return None, str(e)
 
 
 @st.cache_data
 def load_labels():
 
     if not os.path.exists(LABEL_FILE):
-        st.error("Die Datei labels.txt wurde nicht gefunden.")
-        return []
+        return [], "labels.txt wurde nicht gefunden."
 
     try:
 
@@ -227,19 +221,14 @@ def load_labels():
 
             cleaned_labels.append(label)
 
-        return cleaned_labels
+        return cleaned_labels, None
 
-    except OSError:
-
-        st.error(
-            "Die labels.txt konnte nicht gelesen werden."
-        )
-
-        return []
+    except Exception as e:
+        return [], str(e)
 
 
-model = load_model()
-labels = load_labels()
+model, model_error = load_model()
+labels, labels_error = load_labels()
 
 
 # ---------------------------------------------------------
@@ -249,45 +238,28 @@ labels = load_labels()
 def predict_image(image):
 
     if model is None:
-        return "Unbekannt", 0.0
+        return None, 0.0, model_error
 
     if not labels:
-        return "Unbekannt", 0.0
+        return None, 0.0, labels_error
 
     try:
 
         # -------------------------------------------------
-        # EINGABESCHLEIFE DES MODELLS AUSLESEN
-        # -------------------------------------------------
-
-        input_shape = model.input_shape
-
-        if isinstance(input_shape, list):
-            input_shape = input_shape[0]
-
-        height = input_shape[1]
-        width = input_shape[2]
-
-        # Falls das Modell keine feste Größe angibt
-        if height is None:
-            height = 224
-
-        if width is None:
-            width = 224
-
-        height = int(height)
-        width = int(width)
-
-        # -------------------------------------------------
-        # FOTO VORBEREITEN
+        # TEACHABLE MACHINE:
+        # 224 x 224 Pixel
         # -------------------------------------------------
 
         image = image.convert("RGB")
 
-        image = image.resize(
-            (width, height)
+        # Bild proportional zuschneiden
+        image = ImageOps.fit(
+            image,
+            (224, 224),
+            Image.Resampling.LANCZOS
         )
 
+        # Bild in numpy umwandeln
         image_array = np.asarray(
             image,
             dtype=np.float32
@@ -295,19 +267,26 @@ def predict_image(image):
 
         # -------------------------------------------------
         # TEACHABLE MACHINE NORMALISIERUNG
+        #
+        # Werte:
+        # 0...255
+        #
+        # werden zu:
+        # -1...1
         # -------------------------------------------------
 
         image_array = (
             image_array / 127.5
         ) - 1.0
 
+        # Batch-Dimension hinzufügen
         image_array = np.expand_dims(
             image_array,
             axis=0
         )
 
         # -------------------------------------------------
-        # VORHERSAGE
+        # KI
         # -------------------------------------------------
 
         prediction = model.predict(
@@ -315,16 +294,26 @@ def predict_image(image):
             verbose=0
         )
 
-        # Manche Modelle geben eine Liste zurück
-        if isinstance(prediction, list):
-            prediction = prediction[0]
-
         prediction = np.asarray(
             prediction
-        ).flatten()
+        ).reshape(-1)
 
-        if len(prediction) == 0:
-            return "Unbekannt", 0.0
+        # -------------------------------------------------
+        # PRÜFEN
+        # -------------------------------------------------
+
+        if len(prediction) != len(labels):
+
+            return (
+                None,
+                0.0,
+                (
+                    "Das Modell liefert "
+                    f"{len(prediction)} Klassen, "
+                    f"aber labels.txt enthält "
+                    f"{len(labels)} Klassen."
+                )
+            )
 
         # -------------------------------------------------
         # BESTE KLASSE
@@ -338,26 +327,21 @@ def predict_image(image):
             prediction[index]
         )
 
-        # -------------------------------------------------
-        # LABEL
-        # -------------------------------------------------
+        label = labels[index]
 
-        if index < len(labels):
-            label = labels[index]
-        else:
-            label = f"Klasse {index}"
-
-        return label, confidence
+        return (
+            label,
+            confidence,
+            None
+        )
 
     except Exception as e:
 
-        st.error(
-            "Fehler bei der Bilderkennung."
+        return (
+            None,
+            0.0,
+            str(e)
         )
-
-        st.code(str(e))
-
-        return "Unbekannt", 0.0
 
 
 # ---------------------------------------------------------
@@ -368,74 +352,17 @@ def get_category(label):
 
     text = label.lower()
 
-    if any(word in text for word in [
-        "jacke",
-        "hose",
-        "shirt",
-        "t-shirt",
-        "pullover",
-        "hoodie",
-        "schuh",
-        "schuhe",
-        "mütze",
-        "cap",
-        "kleidung",
-        "socke",
-        "mantel",
-    ]):
-        return "Kleidung"
+    if "helm" in text:
+        return "Helm"
 
-    if any(word in text for word in [
-        "schlüssel",
-        "schlussel",
-        "key",
-    ]):
-        return "Schlüssel"
+    if "flasche" in text:
+        return "Flasche"
 
-    if any(word in text for word in [
-        "flasche",
-        "trinkflasche",
-        "wasserflasche",
-    ]):
-        return "Trinkflasche"
+    if "mütze" in text or "muetze" in text:
+        return "Mütze"
 
-    if any(word in text for word in [
-        "tasche",
-        "rucksack",
-        "schulranzen",
-        "beutel",
-    ]):
-        return "Tasche"
-
-    if any(word in text for word in [
-        "handy",
-        "smartphone",
-        "iphone",
-        "telefon",
-        "phone",
-    ]):
-        return "Handy"
-
-    if any(word in text for word in [
-        "ring",
-        "kette",
-        "armband",
-        "schmuck",
-        "ohrring",
-    ]):
-        return "Schmuck"
-
-    if any(word in text for word in [
-        "buch",
-        "heft",
-        "stift",
-        "bleistift",
-        "kugelschreiber",
-        "lineal",
-        "radiergummi",
-        "schulmaterial",
-    ]):
-        return "Schulmaterial"
+    if "turnbeutel" in text:
+        return "Turnbeutel"
 
     return "Sonstiges"
 
@@ -587,6 +514,7 @@ def safe_text(value):
     }
 
     for old, new in replacements.items():
+
         text = text.replace(
             old,
             new
@@ -631,7 +559,7 @@ def show_home():
 
             st.session_state.pop(
                 "search_results",
-                None,
+                None
             )
 
             st.rerun()
@@ -652,7 +580,9 @@ def show_home():
 
 def show_search(data):
 
-    st.title("Fundstück suchen")
+    st.title(
+        "Fundstück suchen"
+    )
 
     if st.button(
         "← Zurück",
@@ -663,7 +593,7 @@ def show_search(data):
 
         st.session_state.pop(
             "search_results",
-            None,
+            None
         )
 
         st.rerun()
@@ -674,7 +604,7 @@ def show_search(data):
 
     item = st.text_input(
         "Gegenstand",
-        placeholder="z. B. Jacke",
+        placeholder="z. B. Helm",
     )
 
     category = st.selectbox(
@@ -777,9 +707,6 @@ def show_search(data):
                     <b>Kategorie:</b>
                     {item_category}<br>
 
-                    <b>Farbe:</b>
-                    {item_color}<br>
-
                     <b>Fundort:</b>
                     {item_location}<br>
 
@@ -829,7 +756,8 @@ def show_add_item(data):
         st.rerun()
 
     st.write(
-        "Lade ein Foto hoch. Die KI erkennt den Gegenstand automatisch."
+        "Lade einfach ein Foto hoch. "
+        "Die KI erkennt den Gegenstand automatisch."
     )
 
     photo = st.file_uploader(
@@ -858,7 +786,7 @@ def show_add_item(data):
     )
 
     if st.button(
-        "KI starten",
+        "KI erkennen lassen",
         key="recognize_photo",
     ):
 
@@ -866,24 +794,38 @@ def show_add_item(data):
             "Die KI analysiert das Foto..."
         ):
 
-            label, confidence = (
+            label, confidence, error = (
                 predict_image(image)
             )
 
-            category = get_category(
-                label
+        if error is not None:
+
+            st.error(
+                "Die KI konnte das Foto nicht analysieren."
             )
 
+            st.code(error)
+
+            return
+
         st.session_state.predicted_label = label
-        st.session_state.predicted_category = category
         st.session_state.predicted_confidence = confidence
+        st.session_state.predicted_category = (
+            get_category(label)
+        )
 
     if "predicted_label" not in st.session_state:
         return
 
     label = st.session_state.predicted_label
-    category = st.session_state.predicted_category
-    confidence = st.session_state.predicted_confidence
+
+    confidence = (
+        st.session_state.predicted_confidence
+    )
+
+    category = (
+        st.session_state.predicted_category
+    )
 
     st.success(
         f"Erkannt: {label}"
@@ -894,7 +836,7 @@ def show_add_item(data):
     )
 
     st.write(
-        f"**Sicherheit der KI:** {confidence * 100:.1f} %"
+        f"**Sicherheit:** {confidence * 100:.1f} %"
     )
 
     location = st.text_input(
@@ -929,7 +871,7 @@ def show_add_item(data):
 
             with open(
                 photo_path,
-                "wb",
+                "wb"
             ) as file:
 
                 file.write(
@@ -987,17 +929,17 @@ def show_add_item(data):
 
             st.session_state.pop(
                 "predicted_label",
-                None,
-            )
-
-            st.session_state.pop(
-                "predicted_category",
-                None,
+                None
             )
 
             st.session_state.pop(
                 "predicted_confidence",
-                None,
+                None
+            )
+
+            st.session_state.pop(
+                "predicted_category",
+                None
             )
 
 

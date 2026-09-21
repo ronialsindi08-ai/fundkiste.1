@@ -66,19 +66,31 @@ os.makedirs(FOTO_ORDNER, exist_ok=True)
 # -----------------------------
 
 def lade_labels():
+
     labels = []
 
-    with open(LABEL_DATEI, "r", encoding="utf-8") as datei:
+    with open(
+        LABEL_DATEI,
+        "r",
+        encoding="utf-8"
+    ) as datei:
+
         for zeile in datei:
+
             zeile = zeile.strip()
 
             if not zeile:
                 continue
 
-            teile = zeile.split(" ", 1)
+            teile = zeile.split(
+                " ",
+                1
+            )
 
             if len(teile) == 2:
-                labels.append(teile[1].strip())
+                labels.append(
+                    teile[1].strip()
+                )
             else:
                 labels.append(zeile)
 
@@ -89,34 +101,30 @@ labels = lade_labels()
 
 
 # -----------------------------
-# Kompatibilität für altes
-# Teachable-Machine-Modell
+# Kompatible DepthwiseConv2D
 # -----------------------------
 
-class MeineDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
+class MeineDepthwiseConv2D(
+    tf.keras.layers.DepthwiseConv2D
+):
 
     @classmethod
-    def from_config(cls, config):
+    def from_config(
+        cls,
+        config
+    ):
+
         config = config.copy()
 
-        # Alte Teachable-Machine-Modelle
-        # enthalten manchmal groups=1.
-        config.pop("groups", None)
+        # Teachable Machine speichert
+        # manchmal groups=1.
+        config.pop(
+            "groups",
+            None
+        )
 
-        return super().from_config(config)
-
-
-class MeineFunctional(tf.keras.Model):
-
-    def call(self, inputs, training=None, mask=None):
-
-        # Alte Keras-Modelle können beim Aufruf
-        # zusätzlich einen mask-Parameter bekommen.
-        # Für unser Bildmodell wird dieser nicht benötigt.
-
-        return super().call(
-            inputs,
-            training=training
+        return super().from_config(
+            config
         )
 
 
@@ -127,8 +135,16 @@ class MeineFunctional(tf.keras.Model):
 @st.cache_resource
 def lade_modell():
 
-    if not os.path.exists(MODEL_DATEI):
-        return None, "Die Datei keras_model.h5 wurde nicht gefunden."
+    if not os.path.exists(
+        MODEL_DATEI
+    ):
+
+        return (
+            None,
+            None,
+            None,
+            "Die Datei keras_model.h5 wurde nicht gefunden."
+        )
 
     try:
 
@@ -136,19 +152,43 @@ def lade_modell():
             MODEL_DATEI,
             compile=False,
             custom_objects={
-                "DepthwiseConv2D": MeineDepthwiseConv2D,
-                "Functional": MeineFunctional
+                "DepthwiseConv2D":
+                    MeineDepthwiseConv2D
             }
         )
 
-        return modell, None
+        # Das Teachable-Machine-Modell besteht aus:
+        #
+        # 1. MobileNetV2
+        # 2. GlobalAveragePooling
+        # 3. Klassifizierungs-Netz
+
+        feature_modell = modell.layers[1]
+
+        mobilenet = feature_modell.layers[1]
+
+        pooling = feature_modell.layers[2]
+
+        klassifizierer = modell.layers[2]
+
+        return (
+            mobilenet,
+            pooling,
+            klassifizierer,
+            None
+        )
 
     except Exception as e:
 
-        return None, str(e)
+        return (
+            None,
+            None,
+            None,
+            str(e)
+        )
 
 
-modell, modell_fehler = lade_modell()
+mobilenet, pooling, klassifizierer, modell_fehler = lade_modell()
 
 
 # -----------------------------
@@ -157,44 +197,69 @@ modell, modell_fehler = lade_modell()
 
 def erkenne_bild(bild):
 
-    if modell is None:
-        return None, 0, modell_fehler
+    if mobilenet is None:
+
+        return (
+            None,
+            0,
+            modell_fehler
+        )
 
     try:
 
+        # Bild in RGB umwandeln
         bild = bild.convert("RGB")
 
+        # Genau wie bei Teachable Machine:
+        # 224 x 224 Pixel
         bild = ImageOps.fit(
             bild,
             (224, 224),
             Image.Resampling.LANCZOS
         )
 
+        # Bild in Zahlen umwandeln
         bild_array = np.asarray(
             bild
         ).astype(np.float32)
 
-        # Teachable Machine Normalisierung
+        # Teachable-Machine-Normalisierung
         bild_array = (
             bild_array / 127.5
         ) - 1
 
+        # Batch hinzufügen
         bild_array = np.expand_dims(
             bild_array,
             axis=0
         )
 
-        # Modell direkt aufrufen
-        # statt model.predict()
-        vorhersage = modell(
+        # -------------------------
+        # 1. MobileNetV2
+        # -------------------------
+
+        x = mobilenet(
             bild_array,
             training=False
         )
+
+        # -------------------------
+        # 2. GlobalAveragePooling
+        # -------------------------
+
+        x = pooling(x)
+
+        # -------------------------
+        # 3. Klassifizierung
+        # -------------------------
+
+        vorhersage = klassifizierer(x)
 
         vorhersage = np.asarray(
             vorhersage
         ).reshape(-1)
 
+        # Anzahl kontrollieren
         if len(vorhersage) != len(labels):
 
             return (
@@ -207,6 +272,7 @@ def erkenne_bild(bild):
                 + " Labels."
             )
 
+        # Höchsten Wert auswählen
         index = int(
             np.argmax(vorhersage)
         )
@@ -214,7 +280,8 @@ def erkenne_bild(bild):
         erkannte_label = labels[index]
 
         sicherheit = (
-            float(vorhersage[index]) * 100
+            float(vorhersage[index])
+            * 100
         )
 
         return (
@@ -246,7 +313,10 @@ def bestimme_kategorie(label):
     if "flasche" in label:
         return "Flasche"
 
-    if "mütze" in label or "muetze" in label:
+    if (
+        "mütze" in label
+        or "muetze" in label
+    ):
         return "Mütze"
 
     if "turnbeutel" in label:
@@ -261,7 +331,9 @@ def bestimme_kategorie(label):
 
 def lade_daten():
 
-    if not os.path.exists(CSV_DATEI):
+    if not os.path.exists(
+        CSV_DATEI
+    ):
 
         return pd.DataFrame(
             columns=[
@@ -324,7 +396,9 @@ def startseite():
 
     st.write("")
 
-    if st.button("📦 Fundstück hinzufügen"):
+    if st.button(
+        "📦 Fundstück hinzufügen"
+    ):
 
         st.session_state["seite"] = "hinzufügen"
         st.rerun()
@@ -336,7 +410,9 @@ def startseite():
 
 def fundstueck_hinzufuegen():
 
-    st.title("Fundstück hinzufügen")
+    st.title(
+        "Fundstück hinzufügen"
+    )
 
     if st.button("← Zurück"):
 
@@ -365,16 +441,22 @@ def fundstueck_hinzufuegen():
         st.image(
             bild,
             caption="Hochgeladenes Foto",
-            use_container_width=True
+            width="stretch"
         )
 
-        if st.button("🤖 KI erkennen lassen"):
+        if st.button(
+            "🤖 KI erkennen lassen"
+        ):
 
             with st.spinner(
                 "Die KI analysiert das Foto..."
             ):
 
-                label, sicherheit, fehler = erkenne_bild(
+                (
+                    label,
+                    sicherheit,
+                    fehler
+                ) = erkenne_bild(
                     bild
                 )
 
@@ -390,8 +472,10 @@ def fundstueck_hinzufuegen():
 
             else:
 
-                kategorie = bestimme_kategorie(
-                    label
+                kategorie = (
+                    bestimme_kategorie(
+                        label
+                    )
                 )
 
                 st.success(
@@ -409,10 +493,21 @@ def fundstueck_hinzufuegen():
                     + f"{sicherheit:.1f}%"
                 )
 
-                st.session_state["erkannt"] = True
-                st.session_state["label"] = label
-                st.session_state["kategorie"] = kategorie
-                st.session_state["bild"] = bild
+                st.session_state[
+                    "erkannt"
+                ] = True
+
+                st.session_state[
+                    "label"
+                ] = label
+
+                st.session_state[
+                    "kategorie"
+                ] = kategorie
+
+                st.session_state[
+                    "bild"
+                ] = bild
 
     if st.session_state.get(
         "erkannt",
@@ -454,17 +549,23 @@ def fundstueck_hinzufuegen():
                     dateiname
                 )
 
-                st.session_state["bild"].save(
+                st.session_state[
+                    "bild"
+                ].save(
                     fotopfad
                 )
 
                 neuer_eintrag = pd.DataFrame(
                     [{
                         "Gegenstand":
-                            st.session_state["label"],
+                            st.session_state[
+                                "label"
+                            ],
 
                         "Kategorie":
-                            st.session_state["kategorie"],
+                            st.session_state[
+                                "kategorie"
+                            ],
 
                         "Fundort":
                             fundort,
@@ -495,7 +596,9 @@ def fundstueck_hinzufuegen():
                     "Das Fundstück wurde gespeichert!"
                 )
 
-                st.session_state["erkannt"] = False
+                st.session_state[
+                    "erkannt"
+                ] = False
 
 
 # -----------------------------

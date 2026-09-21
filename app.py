@@ -173,6 +173,7 @@ st.markdown(
 
 @st.cache_resource
 def load_model():
+
     if not os.path.exists(MODEL_FILE):
         st.error("Die Datei keras_model.h5 wurde nicht gefunden.")
         return None
@@ -182,7 +183,9 @@ def load_model():
             MODEL_FILE,
             compile=False
         )
+
         return model
+
     except Exception as e:
         st.error("Das KI-Modell konnte nicht geladen werden.")
         st.code(str(e))
@@ -191,24 +194,35 @@ def load_model():
 
 @st.cache_data
 def load_labels():
+
     if not os.path.exists(LABEL_FILE):
         st.error("Die Datei labels.txt wurde nicht gefunden.")
         return []
 
     try:
-        with open(LABEL_FILE, "r", encoding="utf-8") as file:
-            labels = [line.strip() for line in file if line.strip()]
 
-        # Teachable Machine schreibt manchmal:
-        # "0 Jacke"
-        # "1 Rucksack"
-        # Deshalb entfernen wir vorne eine mögliche Nummer.
+        with open(
+            LABEL_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
+            labels = [
+                line.strip()
+                for line in file
+                if line.strip()
+            ]
+
         cleaned_labels = []
 
         for label in labels:
+
             parts = label.split(" ", 1)
 
-            if len(parts) == 2 and parts[0].isdigit():
+            if (
+                len(parts) == 2
+                and parts[0].isdigit()
+            ):
                 label = parts[1]
 
             cleaned_labels.append(label)
@@ -216,7 +230,11 @@ def load_labels():
         return cleaned_labels
 
     except OSError:
-        st.error("Die labels.txt konnte nicht gelesen werden.")
+
+        st.error(
+            "Die labels.txt konnte nicht gelesen werden."
+        )
+
         return []
 
 
@@ -225,47 +243,129 @@ labels = load_labels()
 
 
 # ---------------------------------------------------------
-# BILD ERKENNEN
+# KI-ERKENNUNG
 # ---------------------------------------------------------
 
 def predict_image(image):
-    if model is None or not labels:
+
+    if model is None:
+        return "Unbekannt", 0.0
+
+    if not labels:
         return "Unbekannt", 0.0
 
     try:
-        # Bild auf die typische Teachable-Machine-Größe bringen
+
+        # -------------------------------------------------
+        # EINGABESCHLEIFE DES MODELLS AUSLESEN
+        # -------------------------------------------------
+
+        input_shape = model.input_shape
+
+        if isinstance(input_shape, list):
+            input_shape = input_shape[0]
+
+        height = input_shape[1]
+        width = input_shape[2]
+
+        # Falls das Modell keine feste Größe angibt
+        if height is None:
+            height = 224
+
+        if width is None:
+            width = 224
+
+        height = int(height)
+        width = int(width)
+
+        # -------------------------------------------------
+        # FOTO VORBEREITEN
+        # -------------------------------------------------
+
         image = image.convert("RGB")
-        image = image.resize((224, 224))
 
-        image_array = np.asarray(image).astype(np.float32)
+        image = image.resize(
+            (width, height)
+        )
 
-        # Teachable Machine Keras Modelle verwenden normalerweise
-        # Werte zwischen -1 und 1.
-        image_array = (image_array / 127.5) - 1
+        image_array = np.asarray(
+            image,
+            dtype=np.float32
+        )
 
-        image_array = np.expand_dims(image_array, axis=0)
+        # -------------------------------------------------
+        # TEACHABLE MACHINE NORMALISIERUNG
+        # -------------------------------------------------
 
-        prediction = model.predict(image_array, verbose=0)[0]
+        image_array = (
+            image_array / 127.5
+        ) - 1.0
 
-        index = int(np.argmax(prediction))
-        confidence = float(prediction[index])
+        image_array = np.expand_dims(
+            image_array,
+            axis=0
+        )
 
-        if index >= len(labels):
-            return "Unbekannt", confidence
+        # -------------------------------------------------
+        # VORHERSAGE
+        # -------------------------------------------------
 
-        return labels[index], confidence
+        prediction = model.predict(
+            image_array,
+            verbose=0
+        )
+
+        # Manche Modelle geben eine Liste zurück
+        if isinstance(prediction, list):
+            prediction = prediction[0]
+
+        prediction = np.asarray(
+            prediction
+        ).flatten()
+
+        if len(prediction) == 0:
+            return "Unbekannt", 0.0
+
+        # -------------------------------------------------
+        # BESTE KLASSE
+        # -------------------------------------------------
+
+        index = int(
+            np.argmax(prediction)
+        )
+
+        confidence = float(
+            prediction[index]
+        )
+
+        # -------------------------------------------------
+        # LABEL
+        # -------------------------------------------------
+
+        if index < len(labels):
+            label = labels[index]
+        else:
+            label = f"Klasse {index}"
+
+        return label, confidence
 
     except Exception as e:
-        st.error("Das Foto konnte nicht von der KI erkannt werden.")
+
+        st.error(
+            "Fehler bei der Bilderkennung."
+        )
+
         st.code(str(e))
+
         return "Unbekannt", 0.0
 
 
 # ---------------------------------------------------------
-# KATEGORIE AUS KI-ERGEBNIS ERMITTELN
+# KATEGORIE
 # ---------------------------------------------------------
 
 def get_category(label):
+
     text = label.lower()
 
     if any(word in text for word in [
@@ -282,7 +382,6 @@ def get_category(label):
         "kleidung",
         "socke",
         "mantel",
-        "sweatshirt",
     ]):
         return "Kleidung"
 
@@ -302,7 +401,6 @@ def get_category(label):
 
     if any(word in text for word in [
         "tasche",
-        "rucksack",
         "rucksack",
         "schulranzen",
         "beutel",
@@ -347,10 +445,14 @@ def get_category(label):
 # ---------------------------------------------------------
 
 def load_data():
+
     if not os.path.exists(DATA_FILE):
-        return pd.DataFrame(columns=COLUMNS)
+        return pd.DataFrame(
+            columns=COLUMNS
+        )
 
     try:
+
         data = pd.read_csv(
             DATA_FILE,
             dtype=str,
@@ -358,15 +460,26 @@ def load_data():
         ).fillna("")
 
     except pd.errors.EmptyDataError:
-        return pd.DataFrame(columns=COLUMNS)
 
-    except (OSError, pd.errors.ParserError):
+        return pd.DataFrame(
+            columns=COLUMNS
+        )
+
+    except (
+        OSError,
+        pd.errors.ParserError
+    ):
+
         st.error(
             "Die gespeicherten Fundstücke konnten nicht gelesen werden."
         )
-        return pd.DataFrame(columns=COLUMNS)
+
+        return pd.DataFrame(
+            columns=COLUMNS
+        )
 
     for column in COLUMNS:
+
         if column not in data.columns:
             data[column] = ""
 
@@ -378,18 +491,23 @@ def load_data():
 # ---------------------------------------------------------
 
 def save_data(data):
+
     try:
+
         data.to_csv(
             DATA_FILE,
             index=False,
             encoding="utf-8-sig",
         )
+
         return True
 
     except OSError:
+
         st.error(
             "Die Fundstücke konnten nicht gespeichert werden."
         )
+
         return False
 
 
@@ -404,9 +522,11 @@ def search_items(
     color,
     location,
 ):
+
     result = data.copy()
 
     if item.strip():
+
         result = result[
             result["Gegenstand"].str.contains(
                 item.strip(),
@@ -417,11 +537,13 @@ def search_items(
         ]
 
     if category != "Alle":
+
         result = result[
             result["Kategorie"] == category
         ]
 
     if color.strip():
+
         result = result[
             result["Farbe"].str.contains(
                 color.strip(),
@@ -432,6 +554,7 @@ def search_items(
         ]
 
     if location.strip():
+
         result = result[
             result["Fundort"].str.contains(
                 location.strip(),
@@ -449,6 +572,7 @@ def search_items(
 # ---------------------------------------------------------
 
 def safe_text(value):
+
     if pd.isna(value):
         return ""
 
@@ -463,7 +587,10 @@ def safe_text(value):
     }
 
     for old, new in replacements.items():
-        text = text.replace(old, new)
+        text = text.replace(
+            old,
+            new
+        )
 
     return text
 
@@ -489,7 +616,9 @@ def show_home():
         unsafe_allow_html=True,
     )
 
-    left, center, right = st.columns([1, 2, 1])
+    left, center, right = st.columns(
+        [1, 2, 1]
+    )
 
     with center:
 
@@ -497,18 +626,23 @@ def show_home():
             "Suchen",
             key="home_search",
         ):
+
             st.session_state.page = "search"
+
             st.session_state.pop(
                 "search_results",
                 None,
             )
+
             st.rerun()
 
         if st.button(
             "Fundstück hinzufügen",
             key="home_add",
         ):
+
             st.session_state.page = "add"
+
             st.rerun()
 
 
@@ -524,11 +658,14 @@ def show_search(data):
         "← Zurück",
         key="back_search",
     ):
+
         st.session_state.page = "home"
+
         st.session_state.pop(
             "search_results",
             None,
         )
+
         st.rerun()
 
     st.write(
@@ -559,12 +696,15 @@ def show_search(data):
         "Suchen",
         key="perform_search",
     ):
-        st.session_state.search_results = search_items(
-            data,
-            item,
-            category,
-            color,
-            location,
+
+        st.session_state.search_results = (
+            search_items(
+                data,
+                item,
+                category,
+                color,
+                location,
+            )
         )
 
     if "search_results" not in st.session_state:
@@ -575,10 +715,13 @@ def show_search(data):
     if results.empty:
 
         if data.empty:
+
             st.info(
                 "Es wurden noch keine Fundstücke eingetragen."
             )
+
         else:
+
             st.info(
                 "Leider wurde kein passendes Fundstück gefunden."
             )
@@ -591,16 +734,32 @@ def show_search(data):
 
     for _, row in results.iterrows():
 
-        item_name = safe_text(row["Gegenstand"])
-        item_category = safe_text(row["Kategorie"])
-        item_color = safe_text(row["Farbe"])
-        item_location = safe_text(row["Fundort"])
-        item_date = safe_text(row["Datum"])
+        item_name = safe_text(
+            row["Gegenstand"]
+        )
+
+        item_category = safe_text(
+            row["Kategorie"]
+        )
+
+        item_color = safe_text(
+            row["Farbe"]
+        )
+
+        item_location = safe_text(
+            row["Fundort"]
+        )
+
+        item_date = safe_text(
+            row["Datum"]
+        )
+
         item_description = safe_text(
             row["Beschreibung"]
         )
 
         if not item_description:
+
             item_description = (
                 "Keine Beschreibung vorhanden."
             )
@@ -608,17 +767,30 @@ def show_search(data):
         st.markdown(
             f"""
             <div class="item-card">
+
                 <div class="item-title">
                     {item_name}
                 </div>
 
                 <div class="item-info">
-                    <b>Kategorie:</b> {item_category}<br>
-                    <b>Farbe:</b> {item_color}<br>
-                    <b>Fundort:</b> {item_location}<br>
-                    <b>Gefunden am:</b> {item_date}<br>
-                    <b>Beschreibung:</b> {item_description}
+
+                    <b>Kategorie:</b>
+                    {item_category}<br>
+
+                    <b>Farbe:</b>
+                    {item_color}<br>
+
+                    <b>Fundort:</b>
+                    {item_location}<br>
+
+                    <b>Gefunden am:</b>
+                    {item_date}<br>
+
+                    <b>Beschreibung:</b>
+                    {item_description}
+
                 </div>
+
             </div>
             """,
             unsafe_allow_html=True,
@@ -626,7 +798,11 @@ def show_search(data):
 
         photo_path = row["Foto"]
 
-        if photo_path and os.path.exists(photo_path):
+        if (
+            photo_path
+            and os.path.exists(photo_path)
+        ):
+
             st.image(
                 photo_path,
                 caption="Foto des Fundstücks",
@@ -634,36 +810,45 @@ def show_search(data):
 
 
 # ---------------------------------------------------------
-# FUNDSTÜCK MIT FOTO EINGEBEN
+# FUNDSTÜCK HINZUFÜGEN
 # ---------------------------------------------------------
 
 def show_add_item(data):
 
-    st.title("Fundstück hinzufügen")
+    st.title(
+        "Fundstück hinzufügen"
+    )
 
     if st.button(
         "← Zurück",
         key="back_add",
     ):
+
         st.session_state.page = "home"
+
         st.rerun()
 
     st.write(
-        "Lade einfach ein Foto des gefundenen Gegenstands hoch."
+        "Lade ein Foto hoch. Die KI erkennt den Gegenstand automatisch."
     )
 
     photo = st.file_uploader(
         "Foto hochladen",
-        type=["jpg", "jpeg", "png"],
+        type=[
+            "jpg",
+            "jpeg",
+            "png"
+        ],
     )
 
     if photo is None:
+
         st.info(
-            "Lade ein Foto hoch. Die KI erkennt anschließend den Gegenstand."
+            "Lade ein Foto hoch."
         )
+
         return
 
-    # Foto anzeigen
     image = Image.open(photo)
 
     st.image(
@@ -673,20 +858,26 @@ def show_add_item(data):
     )
 
     if st.button(
-        "Foto erkennen",
+        "KI starten",
         key="recognize_photo",
     ):
 
-        with st.spinner("Die KI erkennt den Gegenstand..."):
+        with st.spinner(
+            "Die KI analysiert das Foto..."
+        ):
 
-            label, confidence = predict_image(image)
-            category = get_category(label)
+            label, confidence = (
+                predict_image(image)
+            )
+
+            category = get_category(
+                label
+            )
 
         st.session_state.predicted_label = label
         st.session_state.predicted_category = category
         st.session_state.predicted_confidence = confidence
 
-    # Ergebnis anzeigen
     if "predicted_label" not in st.session_state:
         return
 
@@ -706,10 +897,9 @@ def show_add_item(data):
         f"**Sicherheit der KI:** {confidence * 100:.1f} %"
     )
 
-    # Nur der Fundort muss noch angegeben werden.
     location = st.text_input(
         "Fundort",
-        placeholder="z. B. Sporthalle, Klassenraum oder Schulhof",
+        placeholder="z. B. Sporthalle oder Schulhof",
     )
 
     if st.button(
@@ -718,6 +908,7 @@ def show_add_item(data):
     ):
 
         if not location.strip():
+
             location = "Nicht angegeben"
 
         extension = os.path.splitext(
@@ -725,7 +916,8 @@ def show_add_item(data):
         )[1].lower()
 
         filename = (
-            uuid.uuid4().hex + extension
+            uuid.uuid4().hex
+            + extension
         )
 
         photo_path = os.path.join(
@@ -734,18 +926,22 @@ def show_add_item(data):
         )
 
         try:
+
             with open(
                 photo_path,
                 "wb",
             ) as file:
+
                 file.write(
                     photo.getbuffer()
                 )
 
         except OSError:
+
             st.error(
                 "Das Foto konnte nicht gespeichert werden."
             )
+
             return
 
         new_item = pd.DataFrame(
@@ -789,15 +985,16 @@ def show_add_item(data):
                 "Das Fundstück ist jetzt bei der Suche verfügbar."
             )
 
-            # Ergebnis zurücksetzen
             st.session_state.pop(
                 "predicted_label",
                 None,
             )
+
             st.session_state.pop(
                 "predicted_category",
                 None,
             )
+
             st.session_state.pop(
                 "predicted_confidence",
                 None,
@@ -809,19 +1006,27 @@ def show_add_item(data):
 # ---------------------------------------------------------
 
 if "page" not in st.session_state:
+
     st.session_state.page = "home"
+
 
 data = load_data()
 
+
 if st.session_state.page == "home":
+
     show_home()
 
 elif st.session_state.page == "search":
+
     show_search(data)
 
 elif st.session_state.page == "add":
+
     show_add_item(data)
 
 else:
+
     st.session_state.page = "home"
+
     st.rerun()

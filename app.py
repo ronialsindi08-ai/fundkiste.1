@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image
 import pandas as pd
 import os
+import io
 import h5py
 
 
@@ -27,6 +28,12 @@ DATEN_ORDNER = "data"
 CSV_DATEI = os.path.join(DATEN_ORDNER, "fundstuecke.csv")
 FOTO_ORDNER = os.path.join(DATEN_ORDNER, "fotos")
 
+SPALTEN = ["Gegenstand", "Kategorie", "Fundort", "Datum", "Foto"]
+
+# FIX: Session-State direkt am Anfang initialisieren
+if "seite" not in st.session_state:
+    st.session_state.seite = "start"
+
 
 # --------------------------------------------------
 # Design
@@ -48,7 +55,9 @@ st.markdown(
         color: #111111;
     }}
 
-    div.stButton > button {{
+    /* FIX: zusätzlicher Selektor für neuere Streamlit-Versionen */
+    div.stButton > button,
+    div[data-testid="stButton"] > button {{
         background-color: {BUTTON};
         color: #111111;
         border: none;
@@ -59,7 +68,8 @@ st.markdown(
         width: 100%;
     }}
 
-    div.stButton > button:hover {{
+    div.stButton > button:hover,
+    div[data-testid="stButton"] > button:hover {{
         background-color: #c5cd50;
         color: #111111;
     }}
@@ -99,7 +109,12 @@ def lade_labels():
     return labels
 
 
-labels = lade_labels()
+# FIX: klare Fehlermeldung statt Absturz, wenn labels.txt fehlt
+try:
+    labels = lade_labels()
+except FileNotFoundError:
+    st.error("Die Datei 'labels.txt' wurde nicht gefunden.")
+    st.stop()
 
 
 # --------------------------------------------------
@@ -228,35 +243,45 @@ def erkenne_bild(bild, basis, klassifikator):
     return labels[index], sicherheit
 
 
+# FIX: Ergebnis cachen – vorher hat die KI bei JEDEM
+# Tastendruck (z. B. im Fundort-Feld) alles neu gerechnet
+@st.cache_data(show_spinner=False)
+def erkenne_bild_bytes(bild_bytes):
+
+    bild = Image.open(io.BytesIO(bild_bytes))
+
+    basis, klassifikator = lade_ki()
+
+    return erkenne_bild(bild, basis, klassifikator)
+
+
 # --------------------------------------------------
 # Daten laden
 # --------------------------------------------------
 
+def leere_daten():
+    return pd.DataFrame(columns=SPALTEN)
+
+
 def lade_daten():
 
     if not os.path.exists(CSV_DATEI):
-        return pd.DataFrame(
-            columns=[
-                "Gegenstand",
-                "Kategorie",
-                "Fundort",
-                "Datum",
-                "Foto"
-            ]
-        )
+        return leere_daten()
 
+    # FIX: gezielte Fehler statt blankem except
     try:
-        return pd.read_csv(CSV_DATEI)
-    except:
-        return pd.DataFrame(
-            columns=[
-                "Gegenstand",
-                "Kategorie",
-                "Fundort",
-                "Datum",
-                "Foto"
-            ]
-        )
+        daten = pd.read_csv(CSV_DATEI, encoding="utf-8")
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError):
+        return leere_daten()
+
+    # FIX: fehlende Spalten ergänzen, leere Zellen aufräumen
+    for spalte in SPALTEN:
+        if spalte not in daten.columns:
+            daten[spalte] = ""
+
+    daten = daten.fillna("")
+
+    return daten
 
 
 def speichere_daten(daten):
@@ -324,90 +349,101 @@ def fundstueck_hinzufuegen():
         "Wo wurde es gefunden?"
     )
 
-    if bild is not None:
+    if bild is None:
+        return
 
-        foto = Image.open(bild)
+    bild_bytes = bild.getvalue()
 
-        st.image(
-            foto,
-            caption="Hochgeladenes Foto",
-            use_container_width=True
+    # FIX: defekte/unlesbare Datei abfangen
+    # (stand vorher außerhalb von try und hat die App crashen lassen)
+    try:
+        foto = Image.open(io.BytesIO(bild_bytes))
+    except Exception:
+        st.error("Diese Datei konnte nicht als Bild gelesen werden.")
+        return
+
+    # FIX: use_container_width → width
+    st.image(
+        foto,
+        caption="Hochgeladenes Foto",
+        width="stretch"
+    )
+
+    try:
+
+        with st.spinner("Die KI erkennt das Fundstück ..."):
+            kategorie, sicherheit = erkenne_bild_bytes(bild_bytes)
+
+        st.success(
+            f"Erkannt: **{kategorie}**"
         )
 
-        try:
+        st.write(
+            f"KI-Sicherheit: **{sicherheit * 100:.1f}%**"
+        )
 
-            basis, klassifikator = lade_ki()
+        if not fundort.strip():
+            st.info(
+                "Bitte noch den Fundort eingeben."
+            )
+            return
 
-            with st.spinner("Die KI erkennt das Fundstück ..."):
+        if st.button("Fundstück speichern"):
 
-                kategorie, sicherheit = erkenne_bild(
-                    foto,
-                    basis,
-                    klassifikator
-                )
+            daten = lade_daten()
+
+            # FIX: eindeutiger Dateiname per Zeitstempel.
+            # Vorher konnte ein Foto überschrieben werden,
+            # wenn Zeilen aus der CSV gelöscht wurden.
+            endung = os.path.splitext(bild.name)[1].lower()
+            if endung not in (".jpg", ".jpeg", ".png"):
+                endung = ".jpg"
+
+            zeitstempel = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S_%f")
+            dateiname = zeitstempel + "_fundstueck" + endung
+
+            foto_pfad = os.path.join(
+                FOTO_ORDNER,
+                dateiname
+            )
+
+            # FIX: JPEG kann keine Transparenz speichern
+            speicher_foto = foto
+            if endung in (".jpg", ".jpeg") and foto.mode != "RGB":
+                speicher_foto = foto.convert("RGB")
+
+            speicher_foto.save(foto_pfad)
+
+            neuer_eintrag = pd.DataFrame([{
+                "Gegenstand": kategorie,
+                "Kategorie": kategorie,
+                "Fundort": fundort.strip(),
+                "Datum": pd.Timestamp.now().strftime("%d.%m.%Y"),
+                "Foto": foto_pfad
+            }])
+
+            daten = pd.concat(
+                [daten, neuer_eintrag],
+                ignore_index=True
+            )
+
+            speichere_daten(daten)
 
             st.success(
-                f"Erkannt: **{kategorie}**"
+                "Das Fundstück wurde gespeichert."
             )
 
-            st.write(
-                f"KI-Sicherheit: **{sicherheit * 100:.1f}%**"
-            )
+            st.session_state.seite = "start"
 
-            if fundort:
+            st.rerun()
 
-                if st.button("Fundstück speichern"):
+    except Exception as fehler:
 
-                    daten = lade_daten()
+        st.error(
+            "Die KI konnte das Bild nicht verarbeiten."
+        )
 
-                    dateiname = (
-                        str(len(daten) + 1)
-                        + "_fundstueck."
-                        + bild.name.split(".")[-1]
-                    )
-
-                    foto_pfad = os.path.join(
-                        FOTO_ORDNER,
-                        dateiname
-                    )
-
-                    foto.save(foto_pfad)
-
-                    neuer_eintrag = pd.DataFrame([{
-                        "Gegenstand": kategorie,
-                        "Kategorie": kategorie,
-                        "Fundort": fundort,
-                        "Datum": pd.Timestamp.now().strftime("%d.%m.%Y"),
-                        "Foto": foto_pfad
-                    }])
-
-                    daten = pd.concat(
-                        [daten, neuer_eintrag],
-                        ignore_index=True
-                    )
-
-                    speichere_daten(daten)
-
-                    st.success(
-                        "Das Fundstück wurde gespeichert."
-                    )
-
-                    st.session_state.seite = "start"
-
-                    st.rerun()
-
-            else:
-                st.info(
-                    "Bitte noch den Fundort eingeben."
-                )
-
-        except Exception as fehler:
-
-            st.error(
-                "Die KI konnte das Bild nicht verarbeiten."
-            )
-
-            st.code(str(fehler))
+        st.code(str(fehler))
 
 
 # --------------------------------------------------
@@ -436,16 +472,16 @@ def suchen():
         "Was suchst du?"
     )
 
+    # FIX: Kategorien dynamisch aus den Daten statt fest im Code
+    kategorien = ["Alle"] + sorted(
+        wert
+        for wert in daten["Kategorie"].astype(str).str.strip().unique()
+        if wert
+    )
+
     kategorie = st.selectbox(
         "Kategorie",
-        [
-            "Alle",
-            "helm",
-            "flasche",
-            "mütze",
-            "turnbeutel",
-            "sonstiges"
-        ]
+        kategorien
     )
 
     fundort = st.text_input(
@@ -461,7 +497,8 @@ def suchen():
             .str.contains(
                 suche,
                 case=False,
-                na=False
+                na=False,
+                regex=False
             )
         ]
 
@@ -469,8 +506,9 @@ def suchen():
         ergebnis = ergebnis[
             ergebnis["Kategorie"]
             .astype(str)
+            .str.strip()
             .str.lower()
-            == kategorie.lower()
+            == kategorie.strip().lower()
         ]
 
     if fundort:
@@ -480,7 +518,8 @@ def suchen():
             .str.contains(
                 fundort,
                 case=False,
-                na=False
+                na=False,
+                regex=False
             )
         ]
 
@@ -508,15 +547,16 @@ def suchen():
 
                 foto_pfad = str(
                     eintrag.get("Foto", "")
-                )
+                ).strip()
 
                 if (
                     foto_pfad
                     and os.path.exists(foto_pfad)
                 ):
+                    # FIX: use_container_width → width
                     st.image(
                         foto_pfad,
-                        use_container_width=True
+                        width="stretch"
                     )
 
             with col2:
@@ -541,10 +581,6 @@ def suchen():
 # --------------------------------------------------
 # Navigation
 # --------------------------------------------------
-
-if "seite" not in st.session_state:
-    st.session_state.seite = "start"
-
 
 if st.session_state.seite == "start":
     startseite()

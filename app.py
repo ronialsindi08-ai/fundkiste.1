@@ -1,292 +1,349 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-from PIL import Image, ImageOps
-import tensorflow as tf
 import os
+import uuid
+from datetime import date
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+import tensorflow as tf
+
+from PIL import Image, ImageOps
 
 
-# -----------------------------
-# Einstellungen
-# -----------------------------
+# ---------------------------------------------------------
+# EINSTELLUNGEN
+# ---------------------------------------------------------
+
+APP_NAME = "Fundkiste"
+SCHOOL_NAME = "KATHARINEUM ZU LÜBECK"
+SCHOOL_YEAR = "seit 1531"
+
+DATA_DIR = "data"
+DATA_FILE = os.path.join(DATA_DIR, "fundstuecke.csv")
+PHOTO_DIR = os.path.join(DATA_DIR, "fotos")
+
+MODEL_FILE = "keras_model.h5"
+LABEL_FILE = "labels.txt"
+
+CATEGORIES = [
+    "Helm",
+    "Flasche",
+    "Mütze",
+    "Turnbeutel",
+    "Sonstiges",
+]
+
+COLUMNS = [
+    "Gegenstand",
+    "Kategorie",
+    "Farbe",
+    "Fundort",
+    "Datum",
+    "Beschreibung",
+    "Foto",
+]
+
+
+# ---------------------------------------------------------
+# STREAMLIT
+# ---------------------------------------------------------
 
 st.set_page_config(
-    page_title="Fundkiste",
-    page_icon="🔎",
-    layout="centered"
+    page_title=APP_NAME,
+    page_icon="🧥",
+    layout="centered",
 )
+
+
+# ---------------------------------------------------------
+# ORDNER
+# ---------------------------------------------------------
+
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(PHOTO_DIR, exist_ok=True)
+
+
+# ---------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------
 
 st.markdown(
     """
     <style>
     .stApp {
         background-color: #ded6bb;
+        color: #000000;
+    }
+
+    .block-container {
+        max-width: 900px;
+        padding-top: 2rem;
+        padding-bottom: 3rem;
     }
 
     h1, h2, h3, p, label {
-        color: black !important;
+        color: #000000 !important;
+    }
+
+    .home-title {
+        text-align: center;
+        font-size: clamp(4rem, 11vw, 8rem);
+        line-height: 1;
+        font-weight: 400;
+        color: #000000;
+        margin-top: 1rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .school-name {
+        text-align: center;
+        font-size: clamp(1.2rem, 3vw, 2rem);
+        font-weight: 400;
+        color: #000000;
+    }
+
+    .school-year {
+        text-align: center;
+        font-size: 1.1rem;
+        color: #000000;
+        margin-bottom: 2.5rem;
     }
 
     .stButton > button {
-        background-color: #d1d95b;
-        color: black;
-        border: none;
-        border-radius: 12px;
         width: 100%;
-        padding: 14px;
-        font-size: 18px;
+        min-height: 80px;
+        border: none;
+        border-radius: 22px;
+        background-color: #d1d95b;
+        color: #000000;
+        font-size: 2rem;
+        font-weight: 400;
+        margin: 0.6rem 0;
     }
 
     .stButton > button:hover {
-        background-color: #c3cc4c;
-        color: black;
+        background-color: #c7cf50;
+        color: #000000;
+    }
+
+    .item-card {
+        background-color: rgba(255, 255, 255, 0.40);
+        border: 1px solid rgba(0, 0, 0, 0.12);
+        border-radius: 18px;
+        padding: 1.3rem;
+        margin-bottom: 1rem;
+    }
+
+    .item-title {
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #000000;
+        margin-bottom: 0.7rem;
+    }
+
+    .item-info {
+        color: #000000;
+        line-height: 1.8;
+    }
+
+    .success-box {
+        background-color: #d1d95b;
+        padding: 1rem;Exception encountered when calling Sequential.call().
+
+[1mLayer "functional_4" expects 1 input(s), but it received 2 input tensors. Inputs received: [<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_163>, <KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_164>][0m
+
+Arguments received by Sequential.call():
+  • args=(('<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_163>', '<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_164>'),)
+  • kwargs={'mask': ('None', 'None')}
+        border-radius: 14px;
+        text-align: center;
+        color: #000000;
+        font-weight: 600;
+        margin-top: 1rem;
+    }
+
+    input, textarea {
+        border-radius: 12px !important;
     }
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
-# -----------------------------
-# Dateien
-# -----------------------------
-
-MODEL_DATEI = "keras_model.h5"
-LABEL_DATEI = "labels.txt"
-
-DATA_ORDNER = "data"
-FOTO_ORDNER = os.path.join(DATA_ORDNER, "fotos")
-CSV_DATEI = os.path.join(DATA_ORDNER, "fundstuecke.csv")
-
-os.makedirs(FOTO_ORDNER, exist_ok=True)
-
-
-# -----------------------------
-# Labels laden
-# -----------------------------
-
-def lade_labels():
-
-    labels = []
-
-    with open(
-        LABEL_DATEI,
-        "r",
-        encoding="utf-8"
-    ) as datei:
-
-        for zeile in datei:
-
-            zeile = zeile.strip()
-
-            if not zeile:
-                continue
-
-            teile = zeile.split(
-                " ",
-                1
-            )
-
-            if len(teile) == 2:
-                labels.append(
-                    teile[1].strip()
-                )
-            else:
-                labels.append(zeile)
-
-    return labels
-
-
-labels = lade_labels()
-
-
-# -----------------------------
-# Kompatible DepthwiseConv2D
-# -----------------------------
-
-class MeineDepthwiseConv2D(
-    tf.keras.layers.DepthwiseConv2D
-):
-
-    @classmethod
-    def from_config(
-        cls,
-        config
-    ):
-
-        config = config.copy()
-
-        # Teachable Machine speichert
-        # manchmal groups=1.
-        config.pop(
-            "groups",
-            None
-        )
-
-        return super().from_config(
-            config
-        )
-
-
-# -----------------------------
-# Modell laden
-# -----------------------------
+# ---------------------------------------------------------
+# KI LADEN
+# ---------------------------------------------------------
 
 @st.cache_resource
-def lade_modell():
+def load_model():
 
-    if not os.path.exists(
-        MODEL_DATEI
-    ):
-
-        return (
-            None,
-            None,
-            None,
-            "Die Datei keras_model.h5 wurde nicht gefunden."
-        )
+    if not os.path.exists(MODEL_FILE):
+        return None, "keras_model.h5 wurde nicht gefunden."
 
     try:
-
-        modell = tf.keras.models.load_model(
-            MODEL_DATEI,
-            compile=False,
-            custom_objects={
-                "DepthwiseConv2D":
-                    MeineDepthwiseConv2D
-            }
+        model = tf.keras.models.load_model(
+            MODEL_FILE,
+            compile=False
         )
 
-        # Das Teachable-Machine-Modell besteht aus:
-        #
-        # 1. MobileNetV2
-        # 2. GlobalAveragePooling
-        # 3. Klassifizierungs-Netz
-
-        feature_modell = modell.layers[1]
-
-        mobilenet = feature_modell.layers[1]
-
-        pooling = feature_modell.layers[2]
-
-        klassifizierer = modell.layers[2]
-
-        return (
-            mobilenet,
-            pooling,
-            klassifizierer,
-            None
-        )
+        return model, None
 
     except Exception as e:
-
-        return (
-            None,
-            None,
-            None,
-            str(e)
-        )
+        return None, str(e)
 
 
-mobilenet, pooling, klassifizierer, modell_fehler = lade_modell()
+@st.cache_data
+def load_labels():
 
-
-# -----------------------------
-# KI-Erkennung
-# -----------------------------
-
-def erkenne_bild(bild):
-
-    if mobilenet is None:
-
-        return (
-            None,
-            0,
-            modell_fehler
-        )
+    if not os.path.exists(LABEL_FILE):
+        return [], "labels.txt wurde nicht gefunden."
 
     try:
 
-        # Bild in RGB umwandeln
-        bild = bild.convert("RGB")
+        with open(
+            LABEL_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
 
-        # Genau wie bei Teachable Machine:
+            labels = [
+                line.strip()
+                for line in file
+                if line.strip()
+            ]
+
+        cleaned_labels = []
+
+        for label in labels:
+
+            parts = label.split(" ", 1)
+
+            if (
+                len(parts) == 2
+                and parts[0].isdigit()
+            ):
+                label = parts[1]
+
+            cleaned_labels.append(label)
+
+        return cleaned_labels, None
+
+    except Exception as e:
+        return [], str(e)
+
+
+model, model_error = load_model()
+labels, labels_error = load_labels()
+
+
+# ---------------------------------------------------------
+# KI-ERKENNUNG
+# ---------------------------------------------------------
+
+def predict_image(image):
+
+    if model is None:
+        return None, 0.0, model_error
+
+    if not labels:
+        return None, 0.0, labels_error
+
+    try:
+
+        # -------------------------------------------------
+        # TEACHABLE MACHINE:
         # 224 x 224 Pixel
-        bild = ImageOps.fit(
-            bild,
+        # -------------------------------------------------
+
+        image = image.convert("RGB")
+
+        # Bild proportional zuschneiden
+        image = ImageOps.fit(
+            image,
             (224, 224),
             Image.Resampling.LANCZOS
         )
 
-        # Bild in Zahlen umwandeln
-        bild_array = np.asarray(
-            bild
-        ).astype(np.float32)
+        # Bild in numpy umwandeln
+        image_array = np.asarray(
+            image,
+            dtype=np.float32
+        )
 
-        # Teachable-Machine-Normalisierung
-        bild_array = (
-            bild_array / 127.5
-        ) - 1
+        # -------------------------------------------------
+        # TEACHABLE MACHINE NORMALISIERUNG
+        #
+        # Werte:
+        # 0...255
+        #
+        # werden zu:
+        # -1...1
+        # -------------------------------------------------
 
-        # Batch hinzufügen
-        bild_array = np.expand_dims(
-            bild_array,
+        image_array = (
+            image_array / 127.5
+        ) - 1.0
+Exception encountered when calling Sequential.call().
+
+[1mLayer "functional_4" expects 1 input(s), but it received 2 input tensors. Inputs received: [<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_163>, <KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_164>][0m
+
+Arguments received by Sequential.call():
+  • args=(('<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_163>', '<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_164>'),)
+  • kwargs={'mask': ('None', 'None')}
+        # Batch-Dimension hinzufügen
+        image_array = np.expand_dims(
+            image_array,
             axis=0
         )
 
-        # -------------------------
-        # 1. MobileNetV2
-        # -------------------------
+        # -------------------------------------------------
+        # KI
+        # -------------------------------------------------
 
-        x = mobilenet(
-            bild_array,
-            training=False
+        prediction = model.predict(
+            image_array,
+            verbose=0
         )
 
-        # -------------------------
-        # 2. GlobalAveragePooling
-        # -------------------------
-
-        x = pooling(x)
-
-        # -------------------------
-        # 3. Klassifizierung
-        # -------------------------
-
-        vorhersage = klassifizierer(x)
-
-        vorhersage = np.asarray(
-            vorhersage
+        prediction = np.asarray(
+            prediction
         ).reshape(-1)
 
-        # Anzahl kontrollieren
-        if len(vorhersage) != len(labels):
+        # -------------------------------------------------
+        # PRÜFEN
+        # -------------------------------------------------
+
+        if len(prediction) != len(labels):
 
             return (
                 None,
-                0,
-                "Das Modell liefert "
-                + str(len(vorhersage))
-                + " Ergebnisse, aber labels.txt enthält "
-                + str(len(labels))
-                + " Labels."
+                0.0,
+                (
+                    "Das Modell liefert "
+                    f"{len(prediction)} Klassen, "
+                    f"aber labels.txt enthält "
+                    f"{len(labels)} Klassen."
+                )
             )
 
-        # Höchsten Wert auswählen
+        # -------------------------------------------------
+        # BESTE KLASSE
+        # -------------------------------------------------
+
         index = int(
-            np.argmax(vorhersage)
+            np.argmax(prediction)
         )
 
-        erkannte_label = labels[index]
-
-        sicherheit = (
-            float(vorhersage[index])
-            * 100
+        confidence = float(
+            prediction[index]
         )
+
+        label = labels[index]
 
         return (
-            erkannte_label,
-            sicherheit,
+            label,
+            confidence,
             None
         )
 
@@ -294,449 +351,648 @@ def erkenne_bild(bild):
 
         return (
             None,
-            0,
+            0.0,
             str(e)
         )
 
 
-# -----------------------------
-# Kategorie bestimmen
-# -----------------------------
+# ---------------------------------------------------------
+# KATEGORIE
+# ---------------------------------------------------------
 
-def bestimme_kategorie(label):
+def get_category(label):
 
-    label = label.lower().strip()
+    text = label.lower()
 
-    if "helm" in label:
+    if "helm" in text:
         return "Helm"
 
-    if "flasche" in label:
+    if "flasche" in text:
         return "Flasche"
 
-    if (
-        "mütze" in label
-        or "muetze" in label
-    ):
+    if "mütze" in text or "muetze" in text:
         return "Mütze"
 
-    if "turnbeutel" in label:
+    if "turnbeutel" in text:
         return "Turnbeutel"
 
     return "Sonstiges"
 
 
-# -----------------------------
-# Daten laden
-# -----------------------------
+# ---------------------------------------------------------
+# DATEN LADEN
+# ---------------------------------------------------------
 
-def lade_daten():
+def load_data():
 
-    if not os.path.exists(
-        CSV_DATEI
-    ):
-
+    if not os.path.exists(DATA_FILE):
         return pd.DataFrame(
-            columns=[
-                "Gegenstand",
-                "Kategorie",
-                "Fundort",
-                "Datum",
-                "Foto"
-            ]
+            columns=COLUMNS
         )
 
-    return pd.read_csv(
-        CSV_DATEI
-    )
+    try:
 
+        data = pd.read_csv(
+            DATA_FILE,
+            dtype=str,
+            encoding="utf-8-sig",
+        ).fillna("")
 
-# -----------------------------
-# Daten speichern
-# -----------------------------
+    except pd.errors.EmptyDataError:
 
-def speichere_daten(daten):
+        return pd.DataFrame(
+            columns=COLUMNS
+        )
 
-    os.makedirs(
-        DATA_ORDNER,
-        exist_ok=True
-    )
-
-    daten.to_csv(
-        CSV_DATEI,
-        index=False,
-        encoding="utf-8"
-    )
-
-
-# -----------------------------
-# Startseite
-# -----------------------------
-
-def startseite():
-
-    st.title("Fundkiste")
-
-    st.markdown(
-        """
-        <div style="text-align:center; margin-top:-10px;">
-            <div style="font-size:45px;">⬛</div>
-            <h3>KATHARINEUM ZU LÜBECK</h3>
-            <p>seit 1531</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.write("")
-
-    if st.button("🔎 Suchen"):
-
-        st.session_state["seite"] = "suchen"
-        st.rerun()
-
-    st.write("")
-
-    if st.button(
-        "📦 Fundstück hinzufügen"
+    except (
+        OSError,
+        pd.errors.ParserError
     ):
 
-        st.session_state["seite"] = "hinzufügen"
+        st.error(
+            "Die gespeicherten Fundstücke konnten nicht gelesen werden."
+        )
+
+        return pd.DataFrame(
+            columns=COLUMNS
+        )
+
+    for column in COLUMNS:
+
+        if column not in data.columns:
+            data[column] = ""
+
+    return data[COLUMNS]
+
+
+# ---------------------------------------------------------
+# DATEN SPEICHERN
+# ---------------------------------------------------------
+
+def save_data(data):
+
+    try:
+
+        data.to_csv(
+            DATA_FILE,
+            index=False,
+            encoding="utf-8-sig",
+        )
+
+        return True
+
+    except OSError:
+
+        st.error(
+            "Die Fundstücke konnten nicht gespeichert werden."
+        )
+
+        return False
+
+
+# ---------------------------------------------------------
+# SUCHEN
+# ---------------------------------------------------------
+
+def search_items(
+    data,
+    item,
+    category,
+    color,
+    location,
+):
+
+    result = data.copy()
+
+    if item.strip():
+
+        result = result[
+            result["Gegenstand"].str.contains(
+                item.strip(),
+                case=False,
+                na=False,
+                regex=False,
+            )
+        ]
+
+    if category != "Alle":
+
+        result = result[
+            result["Kategorie"] == category
+        ]
+
+    if color.strip():
+
+        result = result[
+            result["Farbe"].str.contains(
+                color.strip(),
+                case=False,
+                na=False,
+                regex=False,
+            )
+        ]
+
+    if location.strip():
+
+        result = result[
+            result["Fundort"].str.contains(
+                location.strip(),
+                case=False,
+                na=False,
+                regex=False,
+            )
+        ]
+
+    return result
+
+
+# ---------------------------------------------------------
+# HTML SICHER MACHEN
+# ---------------------------------------------------------
+
+def safe_text(value):
+
+    if pd.isna(value):
+        return ""
+
+    text = str(value)
+
+    replacements = {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+    }
+
+    for old, new in replacements.items():
+
+        text = text.replace(
+            old,
+            new
+        )
+
+    return text
+
+
+# ---------------------------------------------------------
+# STARTSEITE
+# ---------------------------------------------------------
+
+def show_home():
+
+    st.markdown(
+        '<div class="home-title">Fundkiste</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f'<div class="school-name">{SCHOOL_NAME}</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f'<div class="school-year">{SCHOOL_YEAR}</div>',
+        unsafe_allow_html=True,
+    )
+
+    left, center, right = st.columns(
+        [1, 2, 1]
+    )
+
+    with center:
+
+        if st.button(
+            "Suchen",
+            key="home_search",
+        ):
+
+            st.session_state.page = "search"
+
+            st.session_state.pop(
+                "search_results",
+                None
+            )
+
+            st.rerun()
+
+        if st.button(
+            "Fundstück hinzufügen",
+            key="home_add",
+        ):
+
+            st.session_state.page = "add"
+
+            st.rerun()
+
+
+# ---------------------------------------------------------
+# SUCHSEITE
+# ---------------------------------------------------------
+
+def show_search(data):
+
+    st.title(
+        "Fundstück suchen"
+    )
+
+    if st.button(
+        "← Zurück",
+        key="back_search",
+    ):
+
+        st.session_state.page = "home"
+
+        st.session_state.pop(
+            "search_results",
+            None
+        )
+
         st.rerun()
 
+    st.write(
+        "Suche nach einem verlorenen Gegenstand."
+    )
 
-# -----------------------------
-# Fundstück hinzufügen
-# -----------------------------
+    item = st.text_input(
+        "Gegenstand",
+        placeholder="z. B. Helm",
+    )
 
-def fundstueck_hinzufuegen():
+    category = st.selectbox(
+        "Kategorie",
+        ["Alle"] + CATEGORIES,
+    )
+
+    color = st.text_input(
+        "Farbe",
+        placeholder="z. B. Schwarz",
+    )
+
+    location = st.text_input(
+        "Fundort",
+        placeholder="z. B. Sporthalle",
+    )
+
+    if st.button(
+        "Suchen",
+        key="perform_search",
+    ):
+
+        st.session_state.search_results = (
+            search_items(
+                data,
+                item,
+                category,
+                color,
+                location,
+            )
+        )
+
+    if "search_results" not in st.session_state:
+        return
+
+    results = st.session_state.search_results
+
+    if results.empty:
+
+        if data.empty:
+
+            st.info(
+                "Es wurden noch keine Fundstücke eingetragen."
+            )
+
+        else:
+
+            st.info(
+                "Leider wurde kein passendes Fundstück gefunden."
+            )
+
+        return
+
+    st.subheader(
+        f"{len(results)} Fundstück(e) gefunden"
+    )
+
+    for _, row in results.iterrows():
+
+        item_name = safe_text(
+            row["Gegenstand"]
+        )
+
+        item_category = safe_text(
+            row["Kategorie"]
+        )
+
+        item_color = safe_text(
+            row["Farbe"]
+        )
+
+        item_location = safe_text(
+            row["Fundort"]
+        )
+
+        item_date = safe_text(
+            row["Datum"]
+        )
+
+        item_description = safe_text(
+            row["Beschreibung"]
+        )
+
+        if not item_description:
+
+            item_description = (
+                "Keine Beschreibung vorhanden."
+            )
+
+        st.markdown(
+            f"""
+            <div class="item-card">
+
+                <div class="item-title">
+                    {item_name}
+                </div>
+
+                <div class="item-info">
+
+                    <b>Kategorie:</b>
+                    {item_category}<br>
+
+                    <b>Fundort:</b>
+                    {item_location}<br>
+
+                    <b>Gefunden am:</b>
+                    {item_date}<br>
+
+                    <b>Beschreibung:</b>
+                    {item_description}
+
+                </div>
+
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        photo_path = row["Foto"]
+
+        if (
+            photo_path
+            and os.path.exists(photo_path)
+        ):
+
+            st.image(
+                photo_path,
+                caption="Foto des Fundstücks",
+            )
+
+
+# ---------------------------------------------------------
+# FUNDSTÜCK HINZUFÜGEN
+# ---------------------------------------------------------
+
+def show_add_item(data):
 
     st.title(
         "Fundstück hinzufügen"
     )
 
-    if st.button("← Zurück"):
+    if st.button(
+        "← Zurück",
+        key="back_add",
+    ):
 
-        st.session_state["seite"] = "start"
+        st.session_state.page = "home"
+
         st.rerun()
 
-    st.write("")
-
     st.write(
-        "Lade ein Foto des Fundstücks hoch."
+        "Lade einfach ein Foto hoch. "
+        "Die KI erkennt den Gegenstand automatisch."
     )
 
-    foto = st.file_uploader(
-        "Foto auswählen",
+    photo = st.file_uploader(
+        "Foto hochladen",
         type=[
             "jpg",
             "jpeg",
             "png"
-        ]
+        ],
     )
 
-    if foto is not None:
-
-        bild = Image.open(foto)
-
-        st.image(
-            bild,
-            caption="Hochgeladenes Foto",
-            width="stretch"
-        )
-
-        if st.button(
-            "🤖 KI erkennen lassen"
-        ):
-
-            with st.spinner(
-                "Die KI analysiert das Foto..."
-            ):
-
-                (
-                    label,
-                    sicherheit,
-                    fehler
-                ) = erkenne_bild(
-                    bild
-                )
-
-            if fehler:
-
-                st.error(
-                    "Die KI konnte das Foto nicht analysieren."
-                )
-
-                st.code(
-                    fehler
-                )
-
-            else:
-
-                kategorie = (
-                    bestimme_kategorie(
-                        label
-                    )
-                )
-
-                st.success(
-                    "Erkannt: "
-                    + kategorie
-                )
-
-                st.write(
-                    "KI-Erkennung: "
-                    + label
-                )
-
-                st.write(
-                    "Sicherheit: "
-                    + f"{sicherheit:.1f}%"
-                )
-
-                st.session_state[
-                    "erkannt"
-                ] = True
-
-                st.session_state[
-                    "label"
-                ] = label
-
-                st.session_state[
-                    "kategorie"
-                ] = kategorie
-
-                st.session_state[
-                    "bild"
-                ] = bild
-
-    if st.session_state.get(
-        "erkannt",
-        False
-    ):
-
-        st.write("")
-
-        fundort = st.text_input(
-            "Wo wurde der Gegenstand gefunden?"
-        )
-
-        if st.button(
-            "Fundstück speichern"
-        ):
-
-            if not fundort:
-
-                st.warning(
-                    "Bitte gib noch den Fundort ein."
-                )
-
-            else:
-
-                daten = lade_daten()
-
-                neue_nummer = (
-                    len(daten) + 1
-                )
-
-                dateiname = (
-                    "fundstueck_"
-                    + str(neue_nummer)
-                    + ".jpg"
-                )
-
-                fotopfad = os.path.join(
-                    FOTO_ORDNER,
-                    dateiname
-                )
-
-                st.session_state[
-                    "bild"
-                ].save(
-                    fotopfad
-                )
-
-                neuer_eintrag = pd.DataFrame(
-                    [{
-                        "Gegenstand":
-                            st.session_state[
-                                "label"
-                            ],
-
-                        "Kategorie":
-                            st.session_state[
-                                "kategorie"
-                            ],
-
-                        "Fundort":
-                            fundort,
-
-                        "Datum":
-                            pd.Timestamp.now().strftime(
-                                "%d.%m.%Y"
-                            ),
-
-                        "Foto":
-                            fotopfad
-                    }]
-                )
-
-                daten = pd.concat(
-                    [
-                        daten,
-                        neuer_eintrag
-                    ],
-                    ignore_index=True
-                )
-
-                speichere_daten(
-                    daten
-                )
-
-                st.success(
-                    "Das Fundstück wurde gespeichert!"
-                )
-
-                st.session_state[
-                    "erkannt"
-                ] = False
-
-
-# -----------------------------
-# Suche
-# -----------------------------
-
-def suchen():
-
-    st.title(
-        "Fundstücke suchen"
-    )
-
-    if st.button("← Zurück"):
-
-        st.session_state["seite"] = "start"
-        st.rerun()
-
-    daten = lade_daten()
-
-    if daten.empty:
+    if photo is None:
 
         st.info(
-            "Es wurden noch keine Fundstücke eingetragen."
+            "Lade ein Foto hoch."
         )
 
         return
 
-    suchtext = st.text_input(
-        "Wonach suchst du?"
+    image = Image.open(photo)
+
+    st.image(
+        image,
+        caption="Hochgeladenes Foto",
+        use_container_width=True,
     )
 
-    kategorie = st.selectbox(
-        "Kategorie",
-        [
-            "Alle",
-            "Helm",
-            "Flasche",
-            "Mütze",
-            "Turnbeutel",
-            "Sonstiges"
-        ]
-    )
+    if st.button(
+        "KI erkennen lassen",
+        key="recognize_photo",
+    ):
 
-    ergebnis = daten.copy()
+        with st.spinner(
+            "Die KI analysiert das Foto..."
+        ):
 
-    if suchtext:
-
-        text = suchtext.lower()
-
-        ergebnis = ergebnis[
-            ergebnis["Gegenstand"]
-            .astype(str)
-            .str.lower()
-            .str.contains(
-                text,
-                na=False
+            label, confidence, error = (
+                predict_image(image)
             )
-            |
-            ergebnis["Fundort"]
-            .astype(str)
-            .str.lower()
-            .str.contains(
-                text,
-                na=False
+
+        if error is not None:
+
+            st.error(
+                "Die KI konnte das Foto nicht analysieren."
             )
-        ]
 
-    if kategorie != "Alle":
+            st.code(error)
 
-        ergebnis = ergebnis[
-            ergebnis["Kategorie"]
-            == kategorie
-        ]
+            return
 
-    if ergebnis.empty:
-
-        st.warning(
-            "Kein passendes Fundstück gefunden."
+        st.session_state.predicted_label = label
+        st.session_state.predicted_confidence = confidence
+        st.session_state.predicted_category = (
+            get_category(label)
         )
 
-    else:
+    if "predicted_label" not in st.session_state:
+        return
 
-        for _, eintrag in ergebnis.iterrows():
+    label = st.session_state.predicted_label
 
-            st.markdown("---")
+    confidence = (
+        st.session_state.predicted_confidence
+    )
 
-            st.subheader(
-                str(
-                    eintrag["Kategorie"]
+    category = (
+        st.session_state.predicted_category
+    )
+
+    st.success(
+        f"Erkannt: {label}"
+    )
+
+    st.write(
+        f"**Kategorie:** {category}"
+    )
+
+    st.write(
+        f"**Sicherheit:** {confidence * 100:.1f} %"
+    )
+
+    location = st.text_input(
+        "Fundort",
+        placeholder="z. B. Sporthalle oder Schulhof",
+    )
+
+    if st.button(
+        "Fundstück speichern",
+        key="save_ai_item",
+    ):
+Exception encountered when calling Sequential.call().
+
+[1mLayer "functional_4" expects 1 input(s), but it received 2 input tensors. Inputs received: [<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_163>, <KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_164>][0m
+
+Arguments received by Sequential.call():
+  • args=(('<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_163>', '<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_164>'),)
+  • kwargs={'mask': ('None', 'None')}Exception encountered when calling Sequential.call().
+
+[1mLayer "functional_4" expects 1 input(s), but it received 2 input tensors. Inputs received: [<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_163>, <KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_164>][0m
+
+Arguments received by Sequential.call():
+  • args=(('<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_163>', '<KerasTensor shape=(None, 7, 7, 1280), dtype=float32, sparse=False, ragged=False, name=keras_tensor_164>'),)
+  • kwargs={'mask': ('None', 'None')}
+        if not location.strip():
+
+            location = "Nicht angegeben"
+
+        extension = os.path.splitext(
+            photo.name
+        )[1].lower()
+
+        filename = (
+            uuid.uuid4().hex
+            + extension
+        )
+
+        photo_path = os.path.join(
+            PHOTO_DIR,
+            filename,
+        )
+
+        try:
+
+            with open(
+                photo_path,
+                "wb"
+            ) as file:
+
+                file.write(
+                    photo.getbuffer()
                 )
+
+        except OSError:
+
+            st.error(
+                "Das Foto konnte nicht gespeichert werden."
             )
 
-            st.write(
-                "Fundort:",
-                str(
-                    eintrag["Fundort"]
-                )
+            return
+
+        new_item = pd.DataFrame(
+            [
+                {
+                    "Gegenstand": label,
+                    "Kategorie": category,
+                    "Farbe": "",
+                    "Fundort": location.strip(),
+                    "Datum": date.today().strftime(
+                        "%d.%m.%Y"
+                    ),
+                    "Beschreibung": (
+                        "Automatisch durch die KI erkannt."
+                    ),
+                    "Foto": photo_path,
+                }
+            ]
+        )
+
+        updated_data = pd.concat(
+            [
+                data,
+                new_item,
+            ],
+            ignore_index=True,
+        )
+
+        if save_data(updated_data):
+
+            st.markdown(
+                """
+                <div class="success-box">
+                    ✓ Fundstück erfolgreich gespeichert!
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-            st.write(
-                "Datum:",
-                str(
-                    eintrag["Datum"]
-                )
+            st.info(
+                "Das Fundstück ist jetzt bei der Suche verfügbar."
             )
 
-            if (
-                "Foto" in eintrag
-                and os.path.exists(
-                    str(eintrag["Foto"])
-                )
-            ):
+            st.session_state.pop(
+                "predicted_label",
+                None
+            )
 
-                st.image(
-                    str(eintrag["Foto"]),
-                    width=300
-                )
+            st.session_state.pop(
+                "predicted_confidence",
+                None
+            )
 
-
-# -----------------------------
-# Navigation
-# -----------------------------
-
-if "seite" not in st.session_state:
-
-    st.session_state["seite"] = "start"
+            st.session_state.pop(
+                "predicted_category",
+                None
+            )
 
 
-if st.session_state["seite"] == "start":
+# ---------------------------------------------------------
+# APP START
+# ---------------------------------------------------------
 
-    startseite()
+if "page" not in st.session_state:
+
+    st.session_state.page = "home"
 
 
-elif st.session_state["seite"] == "hinzufügen":
-
-    fundstueck_hinzufuegen()
+data = load_data()
 
 
-elif st.session_state["seite"] == "suchen":
+if st.session_state.page == "home":
 
-    suchen()
+    show_home()
+
+elif st.session_state.page == "search":
+
+    show_search(data)
+
+elif st.session_state.page == "add":
+
+    show_add_item(data)
+
+else:
+
+    st.session_state.page = "home"
+
+    st.rerun()

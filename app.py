@@ -114,7 +114,7 @@
         </div>
     </header>
 
-    <!-- Main Content Container (Max width 900px as requested) -->
+    <!-- Main Content Container (Max width 900px) -->
     <main class="flex-grow max-w-[900px] w-full mx-auto p-4 md:p-6">
 
         <!-- Header Section -->
@@ -205,7 +205,7 @@
                     <div id="aiResultSuccess" class="hidden space-y-2">
                         <div class="bg-green-100 border-l-4 border-green-600 p-4 rounded-r-xl text-green-900">
                             <p class="font-bold text-lg" id="aiKategorieText">Erkannt: **Mütze**</p>
-                            <p class="text-sm font-semibold text-green-800" id="aiConfidenceText">KI-Sicherheit: **98.4%**</p>
+                            <p class="text-sm font-semibold text-green-800" id="aiConfidenceText">KI-Sicherheit: **98,4%**</p>
                         </div>
                     </div>
 
@@ -408,8 +408,8 @@ LABELS_FILE = "labels.txt"
 def lade_ki():
     """
     Lädt das Keras-Modell mit zweistufigem Fallback:
-    1) Direktes keras.models.load_model
-    2) Manuelles HDF5-Gewichte-Parsing aus Sequential-Gruppen
+    1) Direktes keras.models.load_model("keras_model.h5", compile=False)
+    2) Manuelles HDF5-Gewichte-Parsing aus MobileNetV2 + sequential_1 / sequential_3 Gruppen
     """
     # Labels laden
     labels = []
@@ -428,7 +428,7 @@ def lade_ki():
     except Exception as err1:
         err_msg1 = str(err1)
 
-    # VERSUCH 2: Manueller Fallback per MobileNetV2 + h5py
+    # VERSUCH 2: Manueller Fallback per MobileNetV2 + h5py parsing
     try:
         base_model = tf.keras.applications.MobileNetV2(
             input_shape=(224, 224, 3),
@@ -439,7 +439,7 @@ def lade_ki():
         with h5py.File(MODEL_FILE, "r") as f:
             weights_grp = f["model_weights"]
             
-            # Basis-Gewichte übertragen
+            # Basis-Gewichte übertragen für MobileNetV2 Layers
             for layer in base_model.layers:
                 lname = layer.name
                 if lname in weights_grp:
@@ -453,12 +453,14 @@ def lade_ki():
                     if params:
                         layer.set_weights(params)
 
-            # Sequential Classifier Gewichte auslesen
-            seq3 = weights_grp["sequential_3"]
-            dense1_grp = seq3["dense_Dense1"]
-            dense2_grp = seq3["dense_Dense2"]
+            # Sequential Classifier Gewichte suchen (sequential_1 oder sequential_3)
+            seq_key = "sequential_1" if "sequential_1" in weights_grp else "sequential_3"
+            seq_grp = weights_grp[seq_key]
+            
+            dense1_grp = seq_grp["dense_Dense1"]
+            dense2_grp = seq_grp["dense_Dense2"]
 
-            # Keys auflösen
+            # Keys auflösen (mit und ohne :0)
             k1 = "kernel:0" if "kernel:0" in dense1_grp else "kernel"
             b1 = "bias:0" if "bias:0" in dense1_grp else "bias"
             w_dense1 = np.array(dense1_grp[k1])
@@ -467,7 +469,7 @@ def lade_ki():
             k2 = "kernel:0" if "kernel:0" in dense2_grp else "kernel"
             w_dense2 = np.array(dense2_grp[k2])
 
-        # Modell neu zusammenbauen
+        # Modell neu zusammenbauen: Input 224x224x3 -> MobileNetV2 -> GlobalAveragePooling -> Dense1 -> Dense2
         x = tf.keras.layers.GlobalAveragePooling2D()(base_model.output)
         x = tf.keras.layers.Dense(w_dense1.shape[1], activation="relu")(x)
         outputs = tf.keras.layers.Dense(len(labels), activation="softmax", use_bias=False)(x)
@@ -493,10 +495,10 @@ def vorhersage_ki(image_bytes):
         return None, 0.0, err
     
     try:
+        # Preprocessing: RGB, resize 224x224, normalize (pixel/127.5)-1.0
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         image = image.resize((224, 224))
         img_array = np.asarray(image, dtype=np.float32)
-        # Normalisierung: (pixel / 127.5) - 1.0
         normalized_image = (img_array / 127.5) - 1.0
         data = np.expand_dims(normalized_image, axis=0)
         
@@ -570,7 +572,9 @@ elif st.session_state.seite == "eingeben":
         else:
             kategorie_erkannt = kat
             st.success(f"Erkannt: **{kat}**")
-            st.info(f"KI-Sicherheit: **{conf:.1f}%**")
+            # Deutsche Kommaformatierung z.B. 98,4%
+            conf_formatted = f"{conf:.1f}".replace(".", ",")
+            st.info(f"KI-Sicherheit: **{conf_formatted}%**")
             
     if st.button("Speichern"):
         if not fundort.strip():
@@ -621,7 +625,7 @@ elif st.session_state.seite == "suchen":
     if df.empty:
         st.info("Es wurden noch keine Fundstücke eingetragen.")
     else:
-        # Filter
+        # Filter Layout
         c1, c2, c3 = st.columns(3)
         with c1:
             query_text = st.text_input("Was suchst du?")
@@ -846,7 +850,7 @@ elif st.session_state.seite == "suchen":
                 else if (lowerName.includes('mütze') || lowerName.includes('hat')) detected = 'Mütze';
                 else if (lowerName.includes('beutel') || lowerName.includes('bag')) detected = 'Turnbeutel';
 
-                const confidence = (89 + Math.random() * 10).toFixed(1);
+                const confidence = (89 + Math.random() * 10).toFixed(1).replace('.', ',');
                 simulatedCategory = detected;
 
                 document.getElementById('aiKategorieText').innerHTML = `Erkannt: <strong>${detected}</strong>`;
